@@ -1,0 +1,71 @@
+camera:
+  name: Main Entrance
+  source: '0'
+  width: 1280
+  height: 720
+  require_focus_area: true
+  browser_device_id: ''
+  browser_device_label: ''
+  mode: browser
+  rtsp_transport: tcp
+  target_fps: 12.0
+detection:
+  model: yolo11n.pt
+  confidence: 0.35
+  iou: 0.5
+  tracker: bytetrack.yaml
+counting_line:
+  points:
+  - - 0.1
+    - 0.55
+  - - 0.9
+    - 0.55
+  in_side: positive
+  deadband_pixels: 8
+  crossing_cooldown_seconds: 1.0
+  same_direction_cooldown_seconds: 8.0
+  rearm_distance_pixels: 24
+  minimum_travel_pixels: 20
+  tracker_state_ttl_seconds: 30
+  count_out: false
+focus_area:
+  enabled: false
+  points: []
+tailgating:
+  enabled: true
+  detection_mode: entry_burst
+  minimum_people: 2
+  token_valid_seconds: 6
+  max_people_per_token: 1
+  tailgating_time_window_seconds: 4
+  capture_snapshot: true
+  capture_body_closeup: true
+  body_padding_percent: 0.12
+  capture_face_closeup: true
+  face_padding_percent: 0.3
+  min_face_pixels: 36
+  save_event_clip: true
+  clip_pre_seconds: 3
+  clip_post_seconds: 0
+  snapshot_dir: captures/tailgating
+  alert_cooldown_seconds: 5
+  show_alert_on_screen: true
+  keyboard_test_key: a
+  clip_fps: 10
+door_zone:
+  enabled: false
+  interactive_setup: true
+  points: []
+gate_zone:
+  enabled: false
+  points: []
+  motion_threshold: 0.02
+  idle_seconds: 1.0
+api:
+  enabled: true
+  host: 127.0.0.1
+  port: 8080
+logging:
+  people_count_csv: logs/people_count_log.csv
+  security_events_csv: logs/security_events.csv
+  gate_events_csv: logs/gate_events.csv

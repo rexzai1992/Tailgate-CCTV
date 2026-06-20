@@ -1,0 +1,1539 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tailgating Simulation Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080d12;
+      --panel: #111922;
+      --panel-2: #17222d;
+      --line: #273746;
+      --text: #f2f6f8;
+      --muted: #93a4b3;
+      --green: #42dc87;
+      --amber: #ffc449;
+      --blue: #3bb8ff;
+      --red: #ff4f63;
+      --purple: #b784ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 15% 0%, #132536 0, transparent 31rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    }
+    button, select, input { font: inherit; }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: #1b2834;
+      color: var(--text);
+      cursor: pointer;
+      transition: transform .12s ease, border-color .12s ease, background .12s ease;
+    }
+    button:hover { transform: translateY(-1px); border-color: #4c6579; }
+    button.primary { background: var(--green); color: #052012; border-color: var(--green); font-weight: 800; }
+    button.blue { background: #123e59; border-color: #23698f; }
+    button.danger { color: #ffb4bd; }
+    button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    select {
+      min-width: 220px;
+      max-width: 320px;
+      padding: 10px 34px 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #101820;
+      color: var(--text);
+    }
+    .field { display: grid; gap: 6px; margin-top: 11px; }
+    .field label { color: var(--muted); font-size: 12px; }
+    .field input {
+      width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+      border-radius: 9px; background: #0d151c; color: var(--text);
+    }
+    .check-row {
+      display: flex; align-items: center; gap: 8px; margin-top: 12px;
+      color: #d7e5ef; font-size: 13px;
+    }
+    .check-row input { width: 17px; height: 17px; }
+    .telegram-actions {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;
+    }
+    .telegram-actions button:last-child { grid-column: 1 / -1; }
+    .delivery { margin-top: 7px; color: var(--muted); font-size: 11px; }
+    header {
+      height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 13, 18, .82);
+      backdrop-filter: blur(16px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .logo {
+      width: 38px; height: 38px; display: grid; place-items: center;
+      border-radius: 11px; background: linear-gradient(145deg, #42dc87, #24aee9);
+      color: #06130c; font-weight: 1000;
+    }
+    h1 { margin: 0; font-size: 20px; }
+    .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .header-actions { display: flex; align-items: center; gap: 10px; }
+    .connection {
+      display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #53616d; }
+    .dot.live { background: var(--green); box-shadow: 0 0 12px rgba(66,220,135,.7); }
+    main {
+      width: min(1600px, 100%);
+      margin: 0 auto;
+      padding: 20px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 350px;
+      gap: 18px;
+    }
+    .camera-column { min-width: 0; }
+    .camera-card, .panel {
+      background: rgba(17, 25, 34, .92);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 16px 45px rgba(0,0,0,.24);
+    }
+    .camera-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .camera-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+    .calibration-notice {
+      margin-top: 12px;
+      padding: 12px 14px;
+      border: 1px solid #7d6228;
+      border-radius: 12px;
+      background: rgba(255,196,73,.1);
+      color: #ffd983;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .calibration-notice.ready {
+      border-color: #246b45;
+      background: rgba(66,220,135,.09);
+      color: #8ce8b4;
+    }
+    .stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #020405;
+      overflow: hidden;
+    }
+    #preview, #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: fill;
+    }
+    #preview { background: #020405; }
+    video { display: none; }
+    #overlay { pointer-events: none; }
+    #overlay.editing { pointer-events: auto; cursor: crosshair; }
+    .camera-placeholder {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      text-align: center; color: var(--muted); padding: 30px; pointer-events: none;
+    }
+    .camera-placeholder strong { display: block; color: var(--text); font-size: 19px; margin-bottom: 8px; }
+    .alert-banner {
+      position: absolute;
+      top: 18px; left: 50%; transform: translateX(-50%);
+      z-index: 5; padding: 12px 20px; border-radius: 999px;
+      background: rgba(197, 24, 48, .92); border: 1px solid #ff7183;
+      font-weight: 900; letter-spacing: .05em;
+      box-shadow: 0 10px 35px rgba(255,79,99,.35);
+      display: none;
+    }
+    .alert-banner.show { display: block; animation: pulse 1s infinite alternate; }
+    @keyframes pulse { to { transform: translateX(-50%) scale(1.035); } }
+    .setup-tip {
+      position: absolute; left: 50%; top: 14px; transform: translateX(-50%);
+      z-index: 5; background: rgba(6,12,18,.9); border: 1px solid #496277;
+      border-radius: 10px; padding: 9px 14px; color: #d7e5ef; display: none;
+      pointer-events: none; max-width: 90%; text-align: center; font-size: 13px;
+    }
+    .setup-tip.show { display: block; }
+    .setup-tip.dim { opacity: .25; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .stat {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(17,25,34,.9);
+    }
+    .stat-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+    .stat-value { margin-top: 6px; font-size: 27px; font-weight: 900; }
+    .stat.tokens .stat-value { color: var(--amber); }
+    .stat.security .stat-value { color: var(--green); font-size: 18px; padding-top: 6px; }
+    .stat.security.alert .stat-value { color: var(--red); }
+    aside { display: flex; flex-direction: column; gap: 14px; }
+    .panel { padding: 17px; }
+    .panel h2 { font-size: 15px; margin: 0 0 14px; }
+    .stack { display: grid; gap: 9px; }
+    .stack button { width: 100%; }
+    .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 10px 0 0; }
+    #message {
+      min-height: 20px; color: var(--green); font-size: 13px; margin-top: 10px;
+    }
+    .events { display: grid; gap: 9px; max-height: 300px; overflow: auto; }
+    .event {
+      border: 1px solid var(--line); border-left: 3px solid var(--red);
+      border-radius: 9px; padding: 10px; background: #0c131a;
+    }
+    .event-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+    .event-type { color: #ff8e9b; font-weight: 800; }
+    .event-time { color: var(--muted); }
+    .event-bottom { color: #c6d1d9; font-size: 12px; margin-top: 6px; }
+    .event a { color: var(--blue); }
+    .media { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .media a { display: block; line-height: 0; }
+    .thumb {
+      width: 78px; height: 78px; object-fit: cover; border-radius: 7px;
+      border: 1px solid var(--line); background: #000; display: block;
+    }
+    .clip {
+      width: 100%; max-height: 220px; margin-top: 6px; border-radius: 8px;
+      background: #000; border: 1px solid var(--line);
+    }
+    .empty { color: var(--muted); font-size: 13px; }
+    .fps { color: var(--muted); font-size: 12px; }
+    #capture { display: none; }
+    @media (max-width: 1050px) {
+      main { grid-template-columns: 1fr; }
+      aside { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); }
+    }
+    @media (max-width: 700px) {
+      header { height: auto; padding: 14px; align-items: flex-start; }
+      .header-actions { flex-direction: column; align-items: flex-end; }
+      main { padding: 10px; }
+      .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      aside { grid-template-columns: 1fr; }
+      select { min-width: 150px; width: 100%; }
+      .camera-toolbar { align-items: stretch; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo">TS</div>
+      <div>
+        <h1>Tailgating Simulation Demo</h1>
+        <div class="sub" id="cameraName">Main Entrance</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="connection"><span class="dot" id="liveDot"></span><span id="liveText">Camera stopped</span></div>
+      <select id="cameraSelect" aria-label="Camera device">
+        <option value="">Default camera</option>
+      </select>
+      <button id="refreshCameras">Refresh cameras</button>
+      <button class="primary" id="startCamera">Start camera</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="camera-column">
+      <div class="camera-card">
+        <div class="camera-toolbar">
+          <div class="camera-tools">
+            <button class="primary" id="drawFocus">Draw focus area</button>
+            <button id="clearFocus">Show full camera</button>
+            <button class="blue" id="drawLine">Draw counting line</button>
+            <button id="toggleDiagnostics">Diagnostics: on</button>
+            <button id="toggleOut">Show OUT arrow</button>
+            <button id="drawZone">Draw door zone</button>
+            <button id="drawGate">Draw gate zone</button>
+            <button id="finishZone" disabled>Finish zone</button>
+            <button id="clearZone">Clear zone</button>
+            <button id="clearGate">Clear gate</button>
+            <button id="saveSetup">Save setup</button>
+          </div>
+          <div class="fps" id="processingStatus">Waiting for camera</div>
+        </div>
+        <div class="stage" id="stage">
+          <video id="video" autoplay playsinline muted></video>
+          <img id="ipFeed" alt="IP camera feed" style="display:none; position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#020405;">
+          <canvas id="preview"></canvas>
+          <canvas id="overlay"></canvas>
+          <div class="camera-placeholder" id="placeholder">
+            <div><strong>Camera preview</strong>Allow camera access in your browser to begin tracking.</div>
+          </div>
+          <div class="alert-banner" id="alertBanner">TAILGATING DETECTED</div>
+          <div class="setup-tip" id="setupTip"></div>
+        </div>
+      </div>
+      <div class="calibration-notice" id="calibrationNotice">
+        Detection paused: start the camera and draw the doorway focus area.
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="stat-label">IN</div><div class="stat-value" id="totalIn">0</div></div>
+        <div class="stat"><div class="stat-label">OUT</div><div class="stat-value" id="totalOut">0</div></div>
+        <div class="stat"><div class="stat-label">Inside</div><div class="stat-value" id="inside">0</div></div>
+        <div class="stat tokens"><div class="stat-label">Capture threshold</div><div class="stat-value" id="threshold">2 people</div></div>
+      </div>
+      <div class="stats" style="grid-template-columns: 1fr 1fr; margin-top:12px">
+        <div class="stat security" id="securityCard">
+          <div class="stat-label">Security status</div>
+          <div class="stat-value" id="security">NORMAL</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Gate</div>
+          <div class="stat-value" id="gateState" style="font-size:18px;padding-top:6px;color:var(--muted)">OFF</div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <section class="panel">
+        <h2>Camera source</h2>
+        <label class="hint" for="cameraModeSelect">Source type</label>
+        <select id="cameraModeSelect" style="width:100%; margin-top:6px;">
+          <option value="browser">Browser webcam</option>
+          <option value="ip">IP / RTSP camera</option>
+        </select>
+        <div id="ipFields" style="display:none; margin-top:10px;">
+          <label class="hint" for="cameraUrl">Stream URL (RTSP/HTTP)</label>
+          <input id="cameraUrl" autocomplete="off" placeholder="rtsp://admin:pass@192.168.1.64:554/Streaming/Channels/102" style="width:100%; margin-top:6px;">
+          <div style="display:flex; gap:8px; margin-top:8px;">
+            <select id="rtspTransport" style="flex:1; min-width:0;">
+              <option value="tcp">TCP</option>
+              <option value="udp">UDP</option>
+            </select>
+            <input id="targetFps" type="number" min="1" max="30" value="12" title="Target FPS" style="width:84px;">
+          </div>
+          <p class="hint" id="ipCamStatus"></p>
+        </div>
+        <div class="stack" style="margin-top:10px;">
+          <button class="primary" id="saveCamera">Save camera source</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Automatic capture rule</h2>
+        <p class="hint" id="captureRule">The first person is normal. A second person following within 4 seconds is captured automatically.</p>
+        <div class="stack">
+          <button class="danger" id="resetCounts">Reset counts</button>
+          <button id="resetTracking">Reset tracking</button>
+        </div>
+        <div id="message"></div>
+      </section>
+
+
+      <section class="panel">
+        <h2>Recent security events</h2>
+        <div class="events" id="events"><div class="empty">No security events yet.</div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Recent entries</h2>
+        <div class="events" id="entries"><div class="empty">No entry faces captured yet.</div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Gate activity</h2>
+        <div class="events" id="gateEvents"><div class="empty">No gate movement yet.</div></div>
+      </section>
+    </aside>
+  </main>
+
+  <canvas id="capture"></canvas>
+
+  <script>
+    const video = document.getElementById("video");
+    const preview = document.getElementById("preview");
+    const previewCtx = preview.getContext("2d", {alpha: false});
+    const overlay = document.getElementById("overlay");
+    const ctx = overlay.getContext("2d");
+    const capture = document.getElementById("capture");
+    const captureCtx = capture.getContext("2d", {alpha: false});
+    const cameraSelect = document.getElementById("cameraSelect");
+    const stage = document.getElementById("stage");
+
+    let stream = null;
+    let processing = false;
+    let cameraRunning = false;
+    let cameraMode = "browser";
+    let latest = null;
+    let latestTracks = [];
+    let setupMode = null;
+    let draftPoints = [];
+    let focusPoints = [];
+    let focusEnabled = false;
+    let linePoints = [[0.1, 0.55], [0.9, 0.55]];
+    let inSide = "positive";
+    let countOut = false;
+    let doorPoints = [];
+    let doorEnabled = false;
+    let gatePoints = [];
+    let gateEnabled = false;
+    let setupDirty = false;
+    let sentFrames = 0;
+    let processedFrames = 0;
+    let lastRateAt = performance.now();
+    let knownCameraIds = new Set();
+    let preferredCameraDeviceId = localStorage.getItem("gymSentryCameraDeviceId") || "";
+    let preferredCameraDeviceLabel = localStorage.getItem("gymSentryCameraDeviceLabel") || "";
+    let setupRevision = 0;
+    let setupSaveTimer = null;
+    let setupSaveInProgress = false;
+    let setupSaveAgain = false;
+    let lastEventsSig = null;
+    let lastEntriesSig = null;
+    let lastGateSig = null;
+    let telegramFormTouched = false;
+    let diagnosticsEnabled =
+      localStorage.getItem("gymSentryDiagnostics") !== "off";
+
+    function setMessage(text, error = false) {
+      const node = document.getElementById("message");
+      node.textContent = text;
+      node.style.color = error ? "var(--red)" : "var(--green)";
+    }
+
+    function setTelegramMessage(text, error = false) {
+      const node = document.getElementById("telegramMessage");
+      if (!node) return;
+      node.textContent = text;
+      node.style.color = error ? "var(--red)" : "var(--green)";
+    }
+
+    function telegramPayload() {
+      return {
+        enabled: document.getElementById("telegramEnabled").checked,
+        chat_id: document.getElementById("telegramChatId").value.trim(),
+        bot_token: document.getElementById("telegramToken").value.trim() || null
+      };
+    }
+
+    async function saveTelegramSettings(showMessage = true) {
+      const status = await api("/telegram/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(telegramPayload())
+      });
+      document.getElementById("telegramToken").value = "";
+      telegramFormTouched = false;
+      updateTelegramStatus(status);
+      if (showMessage) setTelegramMessage("Telegram settings saved.");
+      return status;
+    }
+
+    function updateTelegramStatus(telegram) {
+      const dot = document.getElementById("telegramDot");
+      const label = document.getElementById("telegramStatus");
+      if (!dot || !label) return;
+      const ready = telegram.enabled && telegram.configured;
+      dot.classList.toggle("live", ready);
+      label.textContent = ready
+        ? `Active${telegram.bot_username ? ` · @${telegram.bot_username}` : ""}`
+        : telegram.configured
+          ? "Configured but disabled"
+          : "Not configured";
+      if (!telegramFormTouched) {
+        document.getElementById("telegramEnabled").checked = Boolean(telegram.enabled);
+        document.getElementById("telegramChatId").value = telegram.chat_id || "";
+        document.getElementById("telegramToken").placeholder = telegram.token_saved
+          ? "Token saved — leave blank to keep it"
+          : "123456:ABC...";
+      }
+      if (telegram.last_error) setTelegramMessage(telegram.last_error, true);
+    }
+
+    function markSetupChanged(message) {
+      setupDirty = true;
+      setupRevision += 1;
+      if (message) setMessage(message);
+      clearTimeout(setupSaveTimer);
+      setupSaveTimer = setTimeout(() => saveCurrentSetup(false), 600);
+    }
+
+    function currentSetupPayload() {
+      const selectedOption = cameraSelect.selectedOptions[0];
+      return {
+        camera_device_id: cameraSelect.value || preferredCameraDeviceId || null,
+        camera_device_label:
+          selectedOption?.textContent || preferredCameraDeviceLabel || null,
+        focus_points: focusPoints.map(point => [...point]),
+        focus_enabled: focusEnabled,
+        line_points: linePoints.map(point => [...point]),
+        count_out: countOut,
+        door_points: doorPoints.map(point => [...point]),
+        door_enabled: doorEnabled,
+        gate_points: gatePoints.map(point => [...point]),
+        gate_enabled: gateEnabled
+      };
+    }
+
+    async function saveCurrentSetup(showMessage = true) {
+      if (setupSaveInProgress) {
+        setupSaveAgain = true;
+        return;
+      }
+      clearTimeout(setupSaveTimer);
+      const saveButton = document.getElementById("saveSetup");
+      const revision = setupRevision;
+      const payload = currentSetupPayload();
+      setupSaveInProgress = true;
+      try {
+        saveButton.disabled = true;
+        saveButton.textContent = "Saving...";
+        if (showMessage) setMessage("Saving camera and doorway setup...");
+        const status = await api("/control/setup", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        });
+        if (revision === setupRevision) {
+          setupDirty = false;
+          updateStatus(status);
+          setMessage("Camera, focus area, door zone, and IN line saved.");
+        } else {
+          setupSaveAgain = true;
+        }
+      } catch (error) {
+        setupDirty = true;
+        setMessage(`Setup was not saved: ${error.message}`, true);
+      } finally {
+        setupSaveInProgress = false;
+        saveButton.disabled = false;
+        saveButton.textContent = "Save setup";
+        if (setupSaveAgain) {
+          setupSaveAgain = false;
+          setupSaveTimer = setTimeout(
+            () => saveCurrentSetup(false),
+            150
+          );
+        }
+      }
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, options);
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "Request failed");
+      return body;
+    }
+
+    let cameraFormInit = false;
+    function applyCameraMode(status) {
+      const mode = status.camera_mode || "browser";
+      cameraMode = mode;
+      // Populate the settings form once, then keep the live IP status fresh.
+      if (!cameraFormInit) {
+        const modeSel = document.getElementById("cameraModeSelect");
+        if (modeSel) {
+          modeSel.value = mode;
+          const url = status.camera_source && status.camera_source !== "0"
+            ? status.camera_source : "";
+          document.getElementById("cameraUrl").value = url;
+          document.getElementById("rtspTransport").value = status.rtsp_transport || "tcp";
+          document.getElementById("targetFps").value = status.target_fps || 12;
+          document.getElementById("ipFields").style.display = mode === "ip" ? "block" : "none";
+          cameraFormInit = true;
+        }
+      }
+      const ipStatusNode = document.getElementById("ipCamStatus");
+      if (ipStatusNode && status.ip_camera) {
+        ipStatusNode.textContent = status.ip_camera.connected
+          ? "Connected to stream."
+          : (status.ip_camera.last_error || "Connecting…");
+        ipStatusNode.style.color = status.ip_camera.connected ? "var(--green)" : "var(--amber)";
+      }
+      if (mode !== "ip") return;
+      // Server pulls the camera and streams it; hide the browser-capture UI.
+      ["startCamera", "refreshCameras", "cameraSelect"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = "none";
+      });
+      document.getElementById("video").style.display = "none";
+      document.getElementById("preview").style.display = "none";
+      document.getElementById("placeholder").style.display = "none";
+      const feed = document.getElementById("ipFeed");
+      if (feed.getAttribute("src") !== "/video-feed") feed.src = "/video-feed";
+      feed.style.display = "block";
+      cameraRunning = true;  // allow drawing the line / zones over the feed
+      const ip = status.ip_camera || {};
+      document.getElementById("liveDot").classList.toggle("live", Boolean(ip.connected));
+      document.getElementById("liveText").textContent = ip.connected
+        ? "IP camera live"
+        : (ip.last_error || "Connecting to IP camera…");
+    }
+
+    function updateStatus(status) {
+      latest = status;
+      applyCameraMode(status);
+      if (status.preferred_camera_device_id) {
+        preferredCameraDeviceId = status.preferred_camera_device_id;
+        preferredCameraDeviceLabel = status.preferred_camera_device_label || "";
+      }
+      const previousFocus = JSON.stringify([focusEnabled, focusPoints]);
+      if (!setupDirty) {
+        focusPoints = status.focus_points || focusPoints;
+        focusEnabled = Boolean(status.focus_enabled);
+        linePoints = status.line_points || linePoints;
+        inSide = status.in_side || inSide;
+        countOut = Boolean(status.count_out);
+        const outBtn = document.getElementById("toggleOut");
+        if (outBtn) outBtn.textContent = countOut ? "Hide OUT arrow" : "Show OUT arrow";
+        doorPoints = status.door_points || doorPoints;
+        doorEnabled = Boolean(status.door_enabled);
+        gatePoints = status.gate_points || gatePoints;
+        gateEnabled = Boolean(status.gate_enabled);
+        if (
+          cameraRunning &&
+          previousFocus !== JSON.stringify([focusEnabled, focusPoints])
+        ) {
+          applyViewGeometry();
+        }
+      }
+      document.getElementById("cameraName").textContent = status.camera_name;
+      document.getElementById("totalIn").textContent = status.total_in;
+      document.getElementById("totalOut").textContent = status.total_out;
+      document.getElementById("inside").textContent = status.current_inside;
+      document.getElementById("threshold").textContent = `${status.minimum_people || 2} people`;
+      document.getElementById("captureRule").textContent =
+        `The first ${(status.minimum_people || 2) - 1} entry is normal. ` +
+        `Person ${status.minimum_people || 2} following within ` +
+        `${status.tailgating_time_window_seconds || 4} seconds is captured automatically.`;
+      document.getElementById("security").textContent = status.security;
+      document.getElementById("securityCard").classList.toggle("alert", status.security_alert);
+      const calibrationNotice = document.getElementById("calibrationNotice");
+      const calibrationReady = Boolean(status.calibration_ready);
+      calibrationNotice.classList.toggle("ready", calibrationReady);
+      calibrationNotice.textContent = calibrationReady
+        ? `Detection active · unique trackers required · same-person IN cooldown ${status.crossing_guard?.same_direction_cooldown_seconds || 8}s`
+        : "Detection paused: draw and save a doorway focus area. Full-camera frames are not counted.";
+      const banner = document.getElementById("alertBanner");
+      banner.textContent = status.security;
+      banner.classList.toggle("show", status.security_alert);
+      const gateState = status.gate_state || "OFF";
+      const gateNode = document.getElementById("gateState");
+      gateNode.textContent = gateState;
+      gateNode.style.color =
+        gateState === "MOVING" ? "var(--amber)"
+          : gateState === "STILL" ? "var(--green)"
+            : "var(--muted)";
+      updateTelegramStatus(status.telegram || {});
+      renderEvents(status.recent_events || []);
+      renderEntries(status.recent_entries || []);
+      renderGateEvents(status.recent_gate_events || []);
+    }
+
+    function renderGateEvents(events) {
+      const root = document.getElementById("gateEvents");
+      const sig = JSON.stringify(events);
+      if (sig === lastGateSig) return;
+      lastGateSig = sig;
+      if (!events.length) {
+        root.innerHTML = '<div class="empty">No gate movement yet.</div>';
+        return;
+      }
+      root.innerHTML = events.map(event => {
+        const moving = event.event_type === "GATE_MOVEMENT_START";
+        const detail = moving
+          ? "Gate started moving"
+          : `Gate stopped${event.duration_seconds != null ? ` after ${event.duration_seconds}s` : ""}`;
+        return `<div class="event" style="border-left-color: ${moving ? "var(--amber)" : "var(--blue)"}">
+          <div class="event-top">
+            <span class="event-type" style="color:${moving ? "#ffd27a" : "#9bd2ff"}">${moving ? "Gate moving" : "Gate still"}</span>
+            <span class="event-time">${new Date(event.timestamp).toLocaleTimeString()}</span>
+          </div>
+          <div class="event-bottom">${detail} · motion ${event.motion_ratio}</div>
+        </div>`;
+      }).join("");
+    }
+
+    function renderEntries(entries) {
+      const root = document.getElementById("entries");
+      const sig = JSON.stringify(entries);
+      if (sig === lastEntriesSig) return;
+      lastEntriesSig = sig;
+      if (!entries.length) {
+        root.innerHTML = '<div class="empty">No entry faces captured yet.</div>';
+        return;
+      }
+      root.innerHTML = entries.map(entry => {
+        const face = thumb(entry.face_url, "Face");
+        return `<div class="event" style="border-left-color: var(--green)">
+          <div class="event-top">
+            <span class="event-type" style="color:#7be0a8">Entry · ID ${entry.tracker_id}</span>
+            <span class="event-time">${new Date(entry.timestamp).toLocaleTimeString()}</span>
+          </div>
+          <div class="event-bottom">${entry.member_status || ""}</div>
+          ${face ? `<div class="media">${face}</div>` : ""}
+        </div>`;
+      }).join("");
+    }
+
+    function sourceRect() {
+      if (
+        focusEnabled &&
+        setupMode !== "focus" &&
+        focusPoints.length >= 2 &&
+        video.videoWidth &&
+        video.videoHeight
+      ) {
+        const xs = focusPoints.map(point => point[0]);
+        const ys = focusPoints.map(point => point[1]);
+        const x1 = Math.min(...xs);
+        const y1 = Math.min(...ys);
+        const x2 = Math.max(...xs);
+        const y2 = Math.max(...ys);
+        return {
+          x: Math.round(x1 * video.videoWidth),
+          y: Math.round(y1 * video.videoHeight),
+          width: Math.max(1, Math.round((x2 - x1) * video.videoWidth)),
+          height: Math.max(1, Math.round((y2 - y1) * video.videoHeight))
+        };
+      }
+      return {x: 0, y: 0, width: video.videoWidth, height: video.videoHeight};
+    }
+
+    // True only for an arbitrary polygon focus (3+ points); a 2-point focus is
+    // a plain rectangle whose bounding box already equals the crop.
+    function focusIsPolygon() {
+      return focusEnabled && focusPoints.length >= 3 && setupMode !== "focus";
+    }
+
+    // Map a full-frame normalized focus point into the cropped overlay/preview
+    // canvas, which is sized to the focus bounding box (see applyViewGeometry).
+    function focusPointToCanvas(point, canvas) {
+      const rect = sourceRect();
+      const vw = video.videoWidth || 1;
+      const vh = video.videoHeight || 1;
+      return [
+        (point[0] * vw - rect.x) / rect.width * canvas.width,
+        (point[1] * vh - rect.y) / rect.height * canvas.height
+      ];
+    }
+
+    function clipToFocusPolygon(context, canvas) {
+      context.beginPath();
+      focusPoints.forEach((point, index) => {
+        const [x, y] = focusPointToCanvas(point, canvas);
+        if (index === 0) context.moveTo(x, y); else context.lineTo(x, y);
+      });
+      context.closePath();
+      context.clip();
+    }
+
+    function applyViewGeometry() {
+      if (!video.videoWidth || !video.videoHeight) return;
+      const rect = sourceRect();
+      preview.width = rect.width;
+      preview.height = rect.height;
+      overlay.width = rect.width;
+      overlay.height = rect.height;
+      stage.style.aspectRatio = `${rect.width} / ${rect.height}`;
+    }
+
+    function thumb(url, label) {
+      return url
+        ? `<a href="${url}" target="_blank" title="${label}"><img class="thumb" src="${url}" alt="${label}"></a>`
+        : "";
+    }
+
+    function renderEvents(events) {
+      const root = document.getElementById("events");
+      const sig = JSON.stringify(events);
+      if (sig === lastEventsSig) return;
+      lastEventsSig = sig;
+      if (!events.length) {
+        root.innerHTML = '<div class="empty">No security events yet.</div>';
+        return;
+      }
+      root.innerHTML = events.map(event => {
+        const images = [
+          thumb(event.snapshot_url, "Snapshot"),
+          thumb(event.face_url, "Face"),
+          thumb(event.body_url, "Body")
+        ].join("");
+        const clip = event.clip_url
+          ? `<video class="clip" src="${event.clip_url}" controls preload="metadata" playsinline onerror="setTimeout(() => this.load(), 2500)"></video>`
+          : event.clip_pending
+            ? '<div class="delivery">Recording event video…</div>'
+            : "";
+        const delivery = event.telegram_photo_sent || event.telegram_video_sent
+          ? `<div class="delivery">Telegram: ${event.telegram_photo_sent ? "image sent" : "image pending"} · ${event.telegram_video_sent ? "video sent" : "video pending"}</div>`
+          : "";
+        const media = (images || clip) ? `<div class="media">${images}</div>${clip}` : "";
+        return `<div class="event">
+          <div class="event-top">
+            <span class="event-type">${event.event_type}</span>
+            <span class="event-time">${new Date(event.timestamp).toLocaleTimeString()}</span>
+          </div>
+          <div class="event-bottom">Tracker ${event.tracker_id} · ${event.reason}</div>
+          ${media}
+          ${delivery}
+        </div>`;
+      }).join("");
+    }
+
+    async function refreshStatus() {
+      try {
+        const status = await api("/status");
+        updateStatus(status);
+        return status;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    async function populateDevices(preferredDeviceId = null) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(device => device.kind === "videoinput");
+      const current =
+        preferredDeviceId ||
+        cameraSelect.value ||
+        preferredCameraDeviceId;
+      cameraSelect.innerHTML = '<option value="">Choose camera…</option>';
+      cameras.forEach((camera, index) => {
+        const option = document.createElement("option");
+        option.value = camera.deviceId;
+        option.textContent = camera.label || `Camera ${index + 1}`;
+        cameraSelect.appendChild(option);
+      });
+      if ([...cameraSelect.options].some(option => option.value === current)) {
+        cameraSelect.value = current;
+      } else if (
+        preferredCameraDeviceLabel &&
+        cameras.some(camera => cameraLabelMatches(
+          camera.label, preferredCameraDeviceLabel
+        ))
+      ) {
+        const matching = cameras.find(
+          camera => cameraLabelMatches(
+            camera.label, preferredCameraDeviceLabel
+          )
+        );
+        cameraSelect.value = matching.deviceId;
+      }
+      knownCameraIds = new Set(cameras.map(camera => camera.deviceId).filter(Boolean));
+      return cameras;
+    }
+
+    function cameraLabelMatches(actual, preferred) {
+      const clean = value => (value || "")
+        .toLowerCase()
+        .replace(/\s*\([^)]*\)\s*$/, "")
+        .trim();
+      const actualClean = clean(actual);
+      const preferredClean = clean(preferred);
+      return Boolean(
+        actualClean &&
+        preferredClean &&
+        (
+          actualClean === preferredClean ||
+          actualClean.includes(preferredClean) ||
+          preferredClean.includes(actualClean)
+        )
+      );
+    }
+
+    async function refreshCameras(autoSwitchNew = false) {
+      try {
+        const before = new Set(knownCameraIds);
+        const cameras = await populateDevices();
+        const added = cameras.filter(camera => camera.deviceId && !before.has(camera.deviceId));
+        const preferredAdded = added.find(camera =>
+          camera.deviceId === preferredCameraDeviceId ||
+          cameraLabelMatches(camera.label, preferredCameraDeviceLabel)
+        );
+        if (autoSwitchNew && preferredAdded) {
+          cameraSelect.value = preferredAdded.deviceId;
+          setMessage(`Saved camera detected: ${preferredAdded.label || "External camera"}. Connecting...`);
+          await startCamera();
+          return;
+        }
+        if (added.length) {
+          setMessage(
+            `New camera detected: ${added.map(camera => camera.label || "External camera").join(", ")}. Select it to use it.`
+          );
+          return;
+        }
+        const names = cameras.map((camera, index) => camera.label || `Camera ${index + 1}`);
+        setMessage(
+          cameras.length
+            ? `${cameras.length} camera${cameras.length === 1 ? "" : "s"} found: ${names.join(", ")}`
+            : "No browser cameras found.",
+          cameras.length === 0
+        );
+      } catch (error) {
+        setMessage(`Unable to scan cameras: ${error.message}`, true);
+      }
+    }
+
+    async function startCamera() {
+      try {
+        const deviceId = cameraSelect.value;
+        if (stream) {
+          stream.getTracks().forEach(track => track.stop());
+          stream = null;
+        }
+        const openCamera = id => navigator.mediaDevices.getUserMedia({
+          video: {
+            ...(id ? {deviceId: {exact: id}} : {}),
+            width: {ideal: 1280},
+            height: {ideal: 720},
+            frameRate: {ideal: 24}
+          },
+          audio: false
+        });
+        try {
+          stream = await openCamera(deviceId);
+        } catch (exactError) {
+          // Saved/selected camera missing — fall back to any available camera
+          // instead of refusing to start.
+          if (deviceId) {
+            setMessage(
+              "Selected camera not available — using another connected camera.",
+              true
+            );
+            stream = await openCamera("");
+          } else {
+            throw exactError;
+          }
+        }
+        video.srcObject = stream;
+        await video.play();
+        if (!video.videoWidth) {
+          await new Promise(resolve => video.addEventListener("loadedmetadata", resolve, {once: true}));
+        }
+        applyViewGeometry();
+        cameraRunning = true;
+        document.getElementById("placeholder").style.display = "none";
+        document.getElementById("liveDot").classList.add("live");
+        const videoTrack = stream.getVideoTracks()[0];
+        // Auto-reconnect if the camera drops (sleep, unplug, OS reclaim).
+        videoTrack.addEventListener("ended", () => {
+          if (!cameraRunning) return;
+          cameraRunning = false;
+          document.getElementById("liveDot").classList.remove("live");
+          document.getElementById("liveText").textContent = "Camera lost — reconnecting…";
+          setMessage("Camera disconnected. Reconnecting…", true);
+          setTimeout(startCamera, 1500);
+        });
+        const activeDeviceId = videoTrack.getSettings().deviceId || deviceId;
+        await populateDevices(activeDeviceId);
+        const activeOption = [...cameraSelect.options].find(
+          option => option.value === activeDeviceId
+        );
+        const activeName = videoTrack.label || activeOption?.textContent || "Camera";
+        preferredCameraDeviceId = activeDeviceId || "";
+        preferredCameraDeviceLabel = activeName;
+        if (preferredCameraDeviceId) {
+          localStorage.setItem(
+            "gymSentryCameraDeviceId",
+            preferredCameraDeviceId
+          );
+        }
+        localStorage.setItem(
+          "gymSentryCameraDeviceLabel",
+          preferredCameraDeviceLabel
+        );
+        markSetupChanged();
+        document.getElementById("liveText").textContent = `${activeName} live`;
+        document.getElementById("startCamera").textContent = "Restart camera";
+        setMessage(`${activeName} connected.`);
+      } catch (error) {
+        cameraRunning = false;
+        stream = null;
+        setMessage(`Camera error: ${error.message}`, true);
+        document.getElementById("liveDot").classList.remove("live");
+        document.getElementById("liveText").textContent =
+          error.name === "NotAllowedError"
+            ? "Camera permission needed"
+            : "Camera unavailable";
+      }
+    }
+
+    async function sendFrame() {
+      if (cameraMode === "ip") return;
+      if (!cameraRunning || processing || video.readyState < 2) return;
+      processing = true;
+      try {
+        const rect = sourceRect();
+        const width = Math.min(640, rect.width);
+        const height = Math.max(1, Math.round(width * rect.height / rect.width));
+        capture.width = width;
+        capture.height = height;
+        captureCtx.save();
+        captureCtx.fillStyle = "#000";
+        captureCtx.fillRect(0, 0, width, height);
+        if (focusIsPolygon()) clipToFocusPolygon(captureCtx, capture);
+        captureCtx.drawImage(
+          video,
+          rect.x, rect.y, rect.width, rect.height,
+          0, 0, width, height
+        );
+        captureCtx.restore();
+        const blob = await new Promise(resolve => capture.toBlob(resolve, "image/jpeg", 0.78));
+        if (!blob) return;
+        sentFrames += 1;
+        const status = await api("/process-frame", {
+          method: "POST",
+          headers: {"Content-Type": "image/jpeg"},
+          body: blob
+        });
+        latestTracks = status.tracks || [];
+        processedFrames += 1;
+        updateStatus(status);
+      } catch (error) {
+        document.getElementById("processingStatus").textContent = `Processing error: ${error.message}`;
+      } finally {
+        processing = false;
+      }
+    }
+
+    function drawArrow(start, end, color) {
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(3, overlay.width / 320);
+      ctx.beginPath();
+      ctx.moveTo(start[0], start[1]);
+      ctx.lineTo(end[0], end[1]);
+      ctx.stroke();
+      const angle = Math.atan2(end[1] - start[1], end[0] - start[0]);
+      const size = Math.max(12, overlay.width / 60);
+      ctx.beginPath();
+      ctx.moveTo(end[0], end[1]);
+      ctx.lineTo(end[0] - size * Math.cos(angle - Math.PI / 6), end[1] - size * Math.sin(angle - Math.PI / 6));
+      ctx.lineTo(end[0] - size * Math.cos(angle + Math.PI / 6), end[1] - size * Math.sin(angle + Math.PI / 6));
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function renderIpOverlay() {
+      // The server-streamed feed already shows boxes/line/arrows; the client
+      // overlay is only used here for live setup drawing (line/zones/gate).
+      const feed = document.getElementById("ipFeed");
+      if (feed.naturalWidth && overlay.width !== feed.naturalWidth) {
+        overlay.width = feed.naturalWidth;
+        overlay.height = feed.naturalHeight;
+        stage.style.aspectRatio = `${feed.naturalWidth} / ${feed.naturalHeight}`;
+      }
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      if (setupMode && draftPoints.length) {
+        ctx.strokeStyle = "#ffc449";
+        ctx.fillStyle = "#ffc449";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        draftPoints.forEach((p, i) => {
+          const x = p[0] * overlay.width, y = p[1] * overlay.height;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+        draftPoints.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p[0] * overlay.width, p[1] * overlay.height, 6, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+      requestAnimationFrame(renderOverlay);
+    }
+
+    function renderOverlay() {
+      if (cameraMode === "ip") return renderIpOverlay();
+      if (overlay.width && overlay.height) {
+        if (video.readyState >= 2) {
+          const rect = sourceRect();
+          previewCtx.save();
+          if (focusIsPolygon()) {
+            previewCtx.fillStyle = "#000";
+            previewCtx.fillRect(0, 0, preview.width, preview.height);
+            clipToFocusPolygon(previewCtx, preview);
+          }
+          previewCtx.drawImage(
+            video,
+            rect.x, rect.y, rect.width, rect.height,
+            0, 0, preview.width, preview.height
+          );
+          previewCtx.restore();
+        }
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        const activeFocus =
+          setupMode === "focus" ? draftPoints
+            : focusIsPolygon() ? focusPoints
+              : [];
+        if (activeFocus.length) {
+          ctx.strokeStyle = "#ffc449";
+          ctx.fillStyle = "rgba(255,196,73,.12)";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          activeFocus.forEach((point, index) => {
+            const [x, y] = setupMode === "focus"
+              ? [point[0] * overlay.width, point[1] * overlay.height]
+              : focusPointToCanvas(point, overlay);
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          if (activeFocus.length >= 3 && setupMode !== "focus") ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          activeFocus.forEach(point => {
+            const [x, y] = setupMode === "focus"
+              ? [point[0] * overlay.width, point[1] * overlay.height]
+              : focusPointToCanvas(point, overlay);
+            ctx.fillStyle = "#ffc449";
+            ctx.beginPath();
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+        const sourceWidth = latest?.frame_width || 1;
+        const sourceHeight = latest?.frame_height || 1;
+        latestTracks.forEach(track => {
+          const [x1, y1, x2, y2] = track.bbox;
+          const sx = overlay.width / sourceWidth;
+          const sy = overlay.height / sourceHeight;
+          const color = track.suspect ? "#ff4f63" : "#42dc87";
+          ctx.strokeStyle = color;
+          ctx.lineWidth = track.suspect ? 5 : 3;
+          ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+          ctx.fillStyle = color;
+          ctx.font = `700 ${Math.max(14, overlay.width / 55)}px system-ui`;
+          const diagnosticText = diagnosticsEnabled
+            ? `ID ${track.tracker_id} · ${track.line_side || ""} · ${track.line_distance ?? 0}px · ${track.crossing_state || "READY"}`
+            : `ID ${track.tracker_id}`;
+          ctx.fillText(
+            diagnosticText,
+            x1 * sx + 4,
+            Math.max(20, y1 * sy - 7)
+          );
+        });
+
+        const activeLine = setupMode === "line" ? draftPoints : linePoints;
+        if (activeLine.length === 2) {
+          const start = [activeLine[0][0] * overlay.width, activeLine[0][1] * overlay.height];
+          const end = [activeLine[1][0] * overlay.width, activeLine[1][1] * overlay.height];
+          drawArrow(start, end, "#3bb8ff");
+          const dx = end[0] - start[0];
+          const dy = end[1] - start[1];
+          const length = Math.max(1, Math.hypot(dx, dy));
+          const sideSign = inSide === "positive" ? 1 : -1;
+          const nx = sideSign * (-dy / length);
+          const ny = sideSign * (dx / length);
+          const midX = (start[0] + end[0]) / 2;
+          const midY = (start[1] + end[1]) / 2;
+          const inArrowLen = Math.max(46, overlay.width / 9);
+          drawArrow(
+            [midX, midY],
+            [midX + nx * inArrowLen, midY + ny * inArrowLen],
+            "#42dc87"
+          );
+          ctx.fillStyle = "#42dc87";
+          ctx.font = `800 ${Math.max(14, overlay.width / 55)}px system-ui`;
+          ctx.fillText(
+            "IN — TOWARD CAMERA",
+            midX + nx * (inArrowLen + 6),
+            midY + ny * (inArrowLen + 6)
+          );
+          if (countOut) {
+            const outArrowLen = Math.max(30, overlay.width / 13);
+            drawArrow(
+              [midX, midY],
+              [midX - nx * outArrowLen, midY - ny * outArrowLen],
+              "#ff8e9b"
+            );
+            ctx.fillStyle = "#ff8e9b";
+            ctx.fillText(
+              "OUT",
+              midX - nx * (outArrowLen + 6),
+              midY - ny * (outArrowLen + 6)
+            );
+          }
+        } else if (activeLine.length === 1) {
+          ctx.fillStyle = "#3bb8ff";
+          ctx.beginPath();
+          ctx.arc(activeLine[0][0] * overlay.width, activeLine[0][1] * overlay.height, 7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const activeDoor = setupMode === "zone" ? draftPoints : doorPoints;
+        if ((doorEnabled || setupMode === "zone") && activeDoor.length) {
+          ctx.strokeStyle = "#b784ff";
+          ctx.fillStyle = "rgba(183,132,255,.15)";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          activeDoor.forEach((point, index) => {
+            const x = point[0] * overlay.width;
+            const y = point[1] * overlay.height;
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          if (activeDoor.length >= 3 && setupMode !== "zone") ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          activeDoor.forEach(point => {
+            ctx.fillStyle = "#b784ff";
+            ctx.beginPath();
+            ctx.arc(point[0] * overlay.width, point[1] * overlay.height, 6, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+
+        const activeGate = setupMode === "gate" ? draftPoints : gatePoints;
+        if ((gateEnabled || setupMode === "gate") && activeGate.length) {
+          ctx.strokeStyle = "#39d0e6";
+          ctx.fillStyle = "rgba(57,208,230,.14)";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          activeGate.forEach((point, index) => {
+            const x = point[0] * overlay.width;
+            const y = point[1] * overlay.height;
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          if (activeGate.length >= 3 && setupMode !== "gate") ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          activeGate.forEach(point => {
+            ctx.fillStyle = "#39d0e6";
+            ctx.beginPath();
+            ctx.arc(point[0] * overlay.width, point[1] * overlay.height, 6, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+      }
+      requestAnimationFrame(renderOverlay);
+    }
+
+    function beginSetup(mode) {
+      if (!cameraRunning) {
+        setMessage("Start the camera before drawing setup.", true);
+        return;
+      }
+      setupMode = mode;
+      draftPoints = [];
+      overlay.classList.add("editing");
+      if (mode === "focus") applyViewGeometry();
+      const tip = document.getElementById("setupTip");
+      tip.classList.add("show");
+      tip.classList.remove("dim");
+      tip.textContent =
+        mode === "focus"
+          ? "Click points around the doorway (2 corners for a box, or 3+ for a shape), then press Finish focus"
+          : mode === "line"
+            ? "Click two points to draw the counting line"
+            : mode === "gate"
+              ? "Click 3+ points tightly around the gate/turnstile, then press Finish gate"
+              : "Click around the door area, then press Finish zone";
+      const finishButton = document.getElementById("finishZone");
+      finishButton.disabled = mode === "line";
+      finishButton.textContent =
+        mode === "focus" ? "Finish focus"
+          : mode === "gate" ? "Finish gate"
+            : "Finish zone";
+    }
+
+    overlay.addEventListener("pointerdown", event => {
+      if (!setupMode) return;
+      const rect = overlay.getBoundingClientRect();
+      const point = [
+        Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+        Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))
+      ];
+      draftPoints.push(point);
+      // Fade the instruction out of the way once the user starts pointing.
+      document.getElementById("setupTip").classList.add("dim");
+      if (setupMode === "line" && draftPoints.length === 2) {
+        linePoints = draftPoints;
+        markSetupChanged("IN line updated and auto-saving.");
+        setupMode = null;
+        draftPoints = [];
+        overlay.classList.remove("editing");
+        document.getElementById("setupTip").classList.remove("show");
+      }
+    });
+
+    function endSetupDrawing() {
+      setupMode = null;
+      draftPoints = [];
+      overlay.classList.remove("editing");
+      document.getElementById("setupTip").classList.remove("show");
+      document.getElementById("finishZone").disabled = true;
+    }
+
+    document.getElementById("finishZone").addEventListener("click", () => {
+      if (setupMode === "focus") {
+        if (draftPoints.length < 2) {
+          setMessage("Focus area needs at least two corners (or 3+ for a shape).", true);
+          return;
+        }
+        const xs = draftPoints.map(point => point[0]);
+        const ys = draftPoints.map(point => point[1]);
+        if (Math.max(...xs) - Math.min(...xs) < .05 || Math.max(...ys) - Math.min(...ys) < .05) {
+          setMessage("Focus area is too small. Draw a larger doorway region.", true);
+          return;
+        }
+        focusPoints = draftPoints.map(point => [...point]);
+        focusEnabled = true;
+        linePoints = [[0.1, 0.55], [0.9, 0.55]];
+        doorPoints = [];
+        doorEnabled = false;
+        endSetupDrawing();
+        markSetupChanged(
+          "Camera focused on the doorway. Draw the counting line; setup is auto-saving."
+        );
+        applyViewGeometry();
+        return;
+      }
+      if (setupMode === "gate") {
+        if (draftPoints.length < 3) {
+          setMessage("Gate zone needs at least three points.", true);
+          return;
+        }
+        gatePoints = draftPoints;
+        gateEnabled = true;
+        endSetupDrawing();
+        markSetupChanged("Gate zone updated and auto-saving.");
+        return;
+      }
+      if (draftPoints.length < 3) {
+        setMessage("Door zone needs at least three points.", true);
+        return;
+      }
+      doorPoints = draftPoints;
+      doorEnabled = true;
+      endSetupDrawing();
+      markSetupChanged("Door zone updated and auto-saving.");
+    });
+
+    document.getElementById("startCamera").addEventListener("click", startCamera);
+    document.getElementById("refreshCameras").addEventListener("click", () => refreshCameras(false));
+    cameraSelect.addEventListener("change", () => { if (cameraRunning) startCamera(); });
+    document.getElementById("drawFocus").addEventListener("click", () => beginSetup("focus"));
+    document.getElementById("toggleDiagnostics").addEventListener("click", () => {
+      diagnosticsEnabled = !diagnosticsEnabled;
+      localStorage.setItem(
+        "gymSentryDiagnostics",
+        diagnosticsEnabled ? "on" : "off"
+      );
+      document.getElementById("toggleDiagnostics").textContent =
+        `Diagnostics: ${diagnosticsEnabled ? "on" : "off"}`;
+    });
+    document.getElementById("clearFocus").addEventListener("click", () => {
+      focusPoints = [];
+      focusEnabled = false;
+      linePoints = [[0.1, 0.55], [0.9, 0.55]];
+      doorPoints = [];
+      doorEnabled = false;
+      setupMode = null;
+      draftPoints = [];
+      markSetupChanged("Full camera restored and auto-saving.");
+      overlay.classList.remove("editing");
+      document.getElementById("setupTip").classList.remove("show");
+      applyViewGeometry();
+    });
+    document.getElementById("drawLine").addEventListener("click", () => beginSetup("line"));
+    document.getElementById("toggleOut").addEventListener("click", () => {
+      countOut = !countOut;
+      document.getElementById("toggleOut").textContent =
+        countOut ? "Hide OUT arrow" : "Show OUT arrow";
+      markSetupChanged(
+        countOut
+          ? "OUT counting enabled and auto-saving."
+          : "OUT counting disabled; only IN is counted."
+      );
+    });
+    document.getElementById("drawZone").addEventListener("click", () => beginSetup("zone"));
+    document.getElementById("clearZone").addEventListener("click", () => {
+      doorPoints = [];
+      doorEnabled = false;
+      markSetupChanged("Door zone cleared and auto-saving.");
+      setupMode = null;
+      draftPoints = [];
+      overlay.classList.remove("editing");
+      document.getElementById("setupTip").classList.remove("show");
+      document.getElementById("finishZone").disabled = true;
+    });
+    document.getElementById("drawGate").addEventListener("click", () => beginSetup("gate"));
+    document.getElementById("clearGate").addEventListener("click", () => {
+      gatePoints = [];
+      gateEnabled = false;
+      markSetupChanged("Gate zone cleared and auto-saving.");
+      setupMode = null;
+      draftPoints = [];
+      overlay.classList.remove("editing");
+      document.getElementById("setupTip").classList.remove("show");
+      document.getElementById("finishZone").disabled = true;
+    });
+    document.getElementById("saveSetup").addEventListener(
+      "click",
+      () => saveCurrentSetup(true)
+    );
+    document.getElementById("resetCounts").addEventListener("click", async () => {
+      try {
+        updateStatus(await api("/control/reset", {method: "POST"}));
+        setMessage("Counts reset.");
+      } catch (error) { setMessage(error.message, true); }
+    });
+    document.getElementById("cameraModeSelect").addEventListener("change", event => {
+      document.getElementById("ipFields").style.display =
+        event.target.value === "ip" ? "block" : "none";
+    });
+    document.getElementById("saveCamera").addEventListener("click", async () => {
+      const mode = document.getElementById("cameraModeSelect").value;
+      const url = document.getElementById("cameraUrl").value.trim();
+      if (mode === "ip" && !url) {
+        setMessage("Enter the IP camera stream URL.", true);
+        return;
+      }
+      const button = document.getElementById("saveCamera");
+      button.disabled = true;
+      button.textContent = "Saving…";
+      try {
+        await api("/control/camera", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            mode,
+            source: mode === "ip" ? url : "0",
+            rtsp_transport: document.getElementById("rtspTransport").value,
+            target_fps: Number(document.getElementById("targetFps").value) || 12
+          })
+        });
+        setMessage("Camera source saved. Reloading…");
+        setTimeout(() => location.reload(), 600);
+      } catch (error) {
+        setMessage(`Could not save camera source: ${error.message}`, true);
+        button.disabled = false;
+        button.textContent = "Save camera source";
+      }
+    });
+    document.getElementById("resetTracking").addEventListener("click", async () => {
+      try {
+        updateStatus(await api("/control/reset-tracking", {method: "POST"}));
+        setMessage("Tracking reset. Tracker IDs and detection windows cleared; IN/OUT totals kept.");
+      } catch (error) { setMessage(error.message, true); }
+    });
+    if (document.getElementById("telegramSave")) {
+      ["telegramToken", "telegramChatId", "telegramEnabled"].forEach(id => {
+        document.getElementById(id).addEventListener("input", () => {
+          telegramFormTouched = true;
+        });
+        document.getElementById(id).addEventListener("change", () => {
+          telegramFormTouched = true;
+        });
+      });
+      document.getElementById("telegramSave").addEventListener("click", async () => {
+        try {
+          await saveTelegramSettings(true);
+        } catch (error) {
+          setTelegramMessage(error.message, true);
+        }
+      });
+      document.getElementById("telegramDiscover").addEventListener("click", async () => {
+        try {
+          setTelegramMessage("Looking for a chat that sent /start…");
+          const status = await api("/telegram/discover-chat", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              bot_token: document.getElementById("telegramToken").value.trim() || null
+            })
+          });
+          document.getElementById("telegramChatId").value = status.chat_id || "";
+          document.getElementById("telegramToken").value = "";
+          document.getElementById("telegramEnabled").checked = true;
+          telegramFormTouched = true;
+          setTelegramMessage(`Found ${status.chat_title || "Telegram chat"}: ${status.chat_id}`);
+        } catch (error) {
+          setTelegramMessage(error.message, true);
+        }
+      });
+      document.getElementById("telegramTest").addEventListener("click", async () => {
+        try {
+          await saveTelegramSettings(false);
+          setTelegramMessage("Sending test notification…");
+          const status = await api("/telegram/test", {method: "POST"});
+          telegramFormTouched = false;
+          updateTelegramStatus(status);
+          setTelegramMessage("Test notification sent successfully.");
+        } catch (error) {
+          setTelegramMessage(error.message, true);
+        }
+      });
+    }
+    setInterval(sendFrame, 220);
+    setInterval(refreshStatus, 1000);
+    setInterval(() => {
+      const now = performance.now();
+      const seconds = (now - lastRateAt) / 1000;
+      const rate = processedFrames / Math.max(.1, seconds);
+      document.getElementById("processingStatus").textContent = cameraRunning
+        ? latest?.detection_paused_reason
+          ? "AI paused until doorway focus is set"
+          : `AI processing ${rate.toFixed(1)} FPS`
+        : "Waiting for camera";
+      processedFrames = 0;
+      sentFrames = 0;
+      lastRateAt = now;
+    }, 2000);
+
+    renderOverlay();
+    (async () => {
+      document.getElementById("toggleDiagnostics").textContent =
+        `Diagnostics: ${diagnosticsEnabled ? "on" : "off"}`;
+      const initialStatus = await refreshStatus();
+      if ((initialStatus?.camera_mode || "browser") === "ip") {
+        // Server owns the camera in IP mode — nothing to start in the browser.
+        return;
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setMessage("This browser does not support camera access.", true);
+        return;
+      }
+      navigator.mediaDevices.addEventListener?.(
+        "devicechange",
+        () => refreshCameras(true)
+      );
+      const savedDeviceId =
+        initialStatus?.preferred_camera_device_id ||
+        localStorage.getItem("gymSentryCameraDeviceId") ||
+        "";
+      await populateDevices(savedDeviceId);
+      if (
+        savedDeviceId &&
+        [...cameraSelect.options].some(
+          option => option.value === savedDeviceId
+        )
+      ) {
+        cameraSelect.value = savedDeviceId;
+      }
+      await startCamera();
+    })();
+  </script>
+</body>
+</html>
