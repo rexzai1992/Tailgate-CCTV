@@ -1,6 +1,6 @@
 import unittest
 
-from src.web_server import WebCameraProcessor
+from src.web_server import WebCameraProcessor, frigate_restream_url
 
 
 class WebSetupTests(unittest.TestCase):
@@ -27,6 +27,12 @@ class WebSetupTests(unittest.TestCase):
             WebCameraProcessor._validated_focus(
                 [[0.2, 0.2], [0.22, 0.2], [0.21, 0.23]]
             )
+
+    def test_frigate_restream_uses_go2rtc_sub_stream(self) -> None:
+        self.assertEqual(
+            frigate_restream_url("http://frigate:5000/api", "gate01"),
+            "rtsp://frigate:8554/gate01_sub",
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,10 @@ Gym Sentry is a one-camera, anonymous people IN/OUT counter with group-entry
 capture. The camera detects and tracks people; it does **not** recognize faces
 or identify anyone.
 
+Frigate NVR can be used as the 24/7 recording, playback, camera-wall, and
+go2rtc restream layer while this application keeps all analytics and Telegram
+behavior. See [Frigate NVR integration](docs/frigate-integration.md).
+
 The default detection rule is:
 
 - 1 person enters = normal
@@ -276,10 +280,10 @@ webcam, no capture card, no extra software.
    ```
    (Use SADP or the router's device list to find the IP; `101` is the main
    stream, `102` the sub-stream.) Confirm it plays in VLC first.
-3. Switch Gym Sentry to IP mode in `config.yaml`:
+3. Switch Gym Sentry to direct RTSP mode in `config.yaml`:
    ```yaml
    camera:
-     mode: ip          # browser (webcam) | ip (server pulls the stream)
+     source_mode: direct_rtsp
      source: "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102"
      rtsp_transport: tcp
      target_fps: 12
@@ -289,7 +293,10 @@ webcam, no capture card, no extra software.
    Draw the counting line / zones directly over the streamed image.
 
 The stream auto-reconnects if it drops. Keep credentials in `config.yaml`
-private. Set `mode: browser` to return to the local webcam.
+private. Set `source_mode: webcam` to return to the local webcam. For
+production, prefer `source_mode: frigate_restream` so camera credentials and
+24/7 recording remain inside Frigate; see
+[Frigate NVR integration](docs/frigate-integration.md).
 
 ## External camera troubleshooting
 

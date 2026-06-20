@@ -4,10 +4,13 @@ import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import os
 from pathlib import Path
 from threading import RLock
 import time
 from typing import Any
+from urllib.parse import urlparse
+from uuid import uuid4
 
 import cv2
 from fastapi import FastAPI, HTTPException, Request
@@ -17,6 +20,10 @@ import numpy as np
 from pydantic import BaseModel, Field
 import yaml
 from ultralytics import YOLO
+
+from app.api.frigate_routes import create_frigate_router
+from app.integrations.frigate_event_bridge import FrigateEventBridge
+from app.models.analytics_event import AnalyticsEvent
 
 from .access_tokens import AccessTokenStore
 from .api_server import AccessEvent
@@ -55,8 +62,11 @@ class SetupPayload(BaseModel):
 
 
 class CameraSettings(BaseModel):
-    mode: str = "browser"
+    source_mode: str | None = None
+    mode: str | None = None
     source: str = "0"
+    frigate_host: str = ""
+    frigate_camera_name: str = ""
     rtsp_transport: str = "tcp"
     target_fps: float = 12
 
@@ -99,6 +109,27 @@ def extract_tracks(result: Any) -> dict[int, BBox]:
     }
 
 
+def frigate_restream_url(
+    frigate_host: str,
+    camera_name: str,
+) -> str:
+    host_value = frigate_host.strip()
+    if not host_value:
+        host_value = os.getenv(
+            "FRIGATE_BASE_URL", "http://localhost:5000/api"
+        )
+    parsed = urlparse(
+        host_value
+        if "://" in host_value
+        else f"//{host_value}"
+    )
+    hostname = parsed.hostname or "localhost"
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    stream_name = camera_name.strip() or "gate01"
+    return f"rtsp://{hostname}:8554/{stream_name}_sub"
+
+
 class WebCameraProcessor:
     def __init__(self, config_path: Path, config: dict[str, Any]):
         self.config_path = config_path
@@ -119,10 +150,24 @@ class WebCameraProcessor:
         self.require_focus_area = bool(
             camera_config.get("require_focus_area", True)
         )
-        # "browser" (default) = the dashboard pushes webcam frames; "ip" = the
-        # server opens the camera/RTSP stream itself and streams it to the page.
-        self.camera_mode = str(camera_config.get("mode", "browser")).lower()
+        legacy_mode = str(camera_config.get("mode", "browser")).lower()
+        configured_source_mode = str(
+            camera_config.get("source_mode", "")
+        ).lower()
+        self.source_mode = configured_source_mode or (
+            "webcam" if legacy_mode == "browser" else "direct_rtsp"
+        )
+        self.camera_mode = (
+            "browser" if self.source_mode == "webcam" else "ip"
+        )
         self.camera_source = camera_config.get("source", 0)
+        self.frigate_host = str(camera_config.get("frigate_host", ""))
+        self.frigate_camera_name = str(
+            camera_config.get(
+                "frigate_camera_name",
+                os.getenv("FRIGATE_CAMERA_NAME", "gate01"),
+            )
+        )
         self.rtsp_transport = str(camera_config.get("rtsp_transport", "tcp"))
         self.target_fps = float(camera_config.get("target_fps", 12))
         self.ip_stream: IpCameraStream | None = None
@@ -231,7 +276,15 @@ class WebCameraProcessor:
             max_workers=2,
             thread_name_prefix="telegram-alert",
         )
+        self.integration_executor = ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix="frigate-bridge",
+        )
+        self.frigate_bridge = FrigateEventBridge()
         self.pending_clip_notifications: dict[str, dict[str, object]] = {}
+        self.pending_clip_integrations: dict[
+            str, tuple[AnalyticsEvent, dict[str, object]]
+        ] = {}
 
         self.model = YOLO(str(detection_config.get("model", "yolo11n.pt")))
         # Optional inference tuning: device ("cpu"/"mps"/"cuda"/0) and imgsz.
@@ -497,27 +550,59 @@ class WebCameraProcessor:
         if self.ip_stream is not None:
             self.ip_stream.stop()
             self.ip_stream = None
-        if self.camera_mode == "ip":
+        if self.source_mode != "webcam":
             self.ip_stream = IpCameraStream(
                 self,
-                self.camera_source,
+                self.effective_camera_source(),
                 transport=self.rtsp_transport,
                 target_fps=self.target_fps,
             )
             self.ip_stream.start()
 
+    def effective_camera_source(self) -> str | int:
+        if self.source_mode == "frigate_restream":
+            return frigate_restream_url(
+                self.frigate_host, self.frigate_camera_name
+            )
+        return self.camera_source
+
     def update_camera_settings(
-        self, mode: str, source: str, rtsp_transport: str, target_fps: float
+        self,
+        source_mode: str,
+        source: str,
+        frigate_host: str,
+        frigate_camera_name: str,
+        rtsp_transport: str,
+        target_fps: float,
     ) -> dict[str, object]:
+        cleaned_mode = (source_mode or "webcam").lower()
+        if cleaned_mode not in {
+            "webcam",
+            "direct_rtsp",
+            "frigate_restream",
+        }:
+            raise ValueError(
+                "source_mode must be webcam, direct_rtsp, or frigate_restream"
+            )
         with self.lock:
-            self.camera_mode = (mode or "browser").lower()
+            self.source_mode = cleaned_mode
+            self.camera_mode = (
+                "browser" if cleaned_mode == "webcam" else "ip"
+            )
             cleaned = str(source).strip()
             self.camera_source = cleaned if cleaned else 0
+            self.frigate_host = str(frigate_host).strip()
+            self.frigate_camera_name = (
+                str(frigate_camera_name).strip() or "gate01"
+            )
             self.rtsp_transport = (rtsp_transport or "tcp").strip() or "tcp"
             self.target_fps = max(1.0, float(target_fps or 12))
             camera = self.config.setdefault("camera", {})
             camera["mode"] = self.camera_mode
+            camera["source_mode"] = self.source_mode
             camera["source"] = self.camera_source
+            camera["frigate_host"] = self.frigate_host
+            camera["frigate_camera_name"] = self.frigate_camera_name
             camera["rtsp_transport"] = self.rtsp_transport
             camera["target_fps"] = self.target_fps
             with self.config_path.open("w", encoding="utf-8") as handle:
@@ -600,6 +685,8 @@ class WebCameraProcessor:
         with self.lock:
             self.event_capture.close()
         self.notification_executor.shutdown(wait=False, cancel_futures=False)
+        self.integration_executor.shutdown(wait=True, cancel_futures=False)
+        self.frigate_bridge.close()
 
     def save_telegram_settings(
         self, payload: TelegramSettingsPayload
@@ -847,8 +934,49 @@ class WebCameraProcessor:
             "clip_pending": bool(clip_path),
             "telegram_photo_sent": False,
             "telegram_video_sent": False,
+            "analytics_event_id": "",
+            "frigate_ok": None,
+            "frigate_event_id": "",
+            "frigate_export_id": "",
+            "frigate_clip_url": "",
+            "frigate_errors": [],
         }
+        analytics_event = AnalyticsEvent(
+            event_id=uuid4().hex,
+            camera=self.frigate_camera_name,
+            event_type=result.event_type or "TAILGATING_DETECTED",
+            start_ts=wall_now.timestamp(),
+            end_ts=wall_now.timestamp(),
+            severity=(
+                "high"
+                if result.event_type == "TAILGATING_DETECTED"
+                else "medium"
+            ),
+            track_ids=[result.tracker_id],
+            bbox=list(bbox) if bbox is not None else None,
+            snapshot_path=snapshot_path or None,
+            face_crop_path=face_path or None,
+            body_crop_path=body_path or None,
+            local_clip_path=None,
+            metadata={
+                "reason": result.reason,
+                "analytics_camera_name": self.camera_name,
+                "total_in": self.total_in,
+                "total_out": self.total_out,
+                "current_inside": max(
+                    0, self.total_in - self.total_out
+                ),
+            },
+        )
+        event["analytics_event_id"] = analytics_event.event_id
         self.recent_events.appendleft(event)
+        if clip_path:
+            self.pending_clip_integrations[str(Path(clip_path))] = (
+                analytics_event,
+                event,
+            )
+        else:
+            self._dispatch_analytics_event(analytics_event, event)
         # Send only one Telegram alert per incident: show_alert honours
         # alert_cooldown_seconds, so a burst of people produces a single message
         # instead of one per person.
@@ -905,7 +1033,13 @@ class WebCameraProcessor:
             "security": self.alert_text,
             "security_alert": security_alert,
             "camera_mode": self.camera_mode,
+            "source_mode": self.source_mode,
             "camera_source": str(self.camera_source),
+            "camera_effective_source": str(
+                self.effective_camera_source()
+            ),
+            "frigate_host": self.frigate_host,
+            "frigate_camera_name": self.frigate_camera_name,
             "rtsp_transport": self.rtsp_transport,
             "target_fps": self.target_fps,
             "ip_camera": (
@@ -961,19 +1095,60 @@ class WebCameraProcessor:
 
     def _complete_event_clip(self, clip_path: str) -> None:
         path = str(Path(clip_path))
-        pending = self.pending_clip_notifications.pop(path, None)
-        if pending is None:
-            return
-        event = pending["event"]
-        if isinstance(event, dict):
-            event["clip_url"] = self._snapshot_url(path)
-            event["clip_pending"] = False
-        self.notification_executor.submit(
-            self._send_telegram_video,
-            event,
-            path,
-            str(pending["caption"]),
+        notification = self.pending_clip_notifications.pop(path, None)
+        integration = self.pending_clip_integrations.pop(path, None)
+        if notification is not None:
+            event = notification["event"]
+            if isinstance(event, dict):
+                event["clip_url"] = self._snapshot_url(path)
+                event["clip_pending"] = False
+            self.notification_executor.submit(
+                self._send_telegram_video,
+                event,
+                path,
+                str(notification["caption"]),
+            )
+        if integration is not None:
+            analytics_event, dashboard_event = integration
+            analytics_event.end_ts = time.time()
+            analytics_event.local_clip_path = path
+            dashboard_event["clip_url"] = self._snapshot_url(path)
+            dashboard_event["clip_pending"] = False
+            self._dispatch_analytics_event(
+                analytics_event, dashboard_event
+            )
+
+    def _dispatch_analytics_event(
+        self,
+        analytics_event: AnalyticsEvent,
+        dashboard_event: dict[str, object],
+    ) -> None:
+        self.integration_executor.submit(
+            self._run_analytics_bridge,
+            analytics_event,
+            dashboard_event,
         )
+
+    def _run_analytics_bridge(
+        self,
+        analytics_event: AnalyticsEvent,
+        dashboard_event: dict[str, object],
+    ) -> None:
+        bridge_result = self.frigate_bridge.handle_event(analytics_event)
+        with self.lock:
+            dashboard_event["frigate_ok"] = bridge_result.get("ok")
+            dashboard_event["frigate_event_id"] = (
+                bridge_result.get("frigate_event_id") or ""
+            )
+            dashboard_event["frigate_export_id"] = (
+                bridge_result.get("frigate_export_id") or ""
+            )
+            dashboard_event["frigate_clip_url"] = (
+                bridge_result.get("frigate_clip_url") or ""
+            )
+            dashboard_event["frigate_errors"] = list(
+                bridge_result.get("errors") or []
+            )
 
     def _send_telegram_photo(
         self,
@@ -1095,6 +1270,10 @@ def create_web_app(config_path: Path) -> FastAPI:
     app = FastAPI(title="Gym Sentry Web", version="2.0")
     app.state.gym_sentry_config = config
     app.state.processor = processor
+    app.state.frigate_bridge = processor.frigate_bridge
+    app.include_router(
+        create_frigate_router(processor.frigate_bridge)
+    )
 
     processor.start_camera_stream()
 
@@ -1149,12 +1328,24 @@ def create_web_app(config_path: Path) -> FastAPI:
 
     @app.post("/control/camera")
     def control_camera(settings: CameraSettings) -> dict[str, object]:
-        return processor.update_camera_settings(
-            mode=settings.mode,
-            source=settings.source,
-            rtsp_transport=settings.rtsp_transport,
-            target_fps=settings.target_fps,
-        )
+        source_mode = settings.source_mode
+        if not source_mode:
+            source_mode = (
+                "webcam"
+                if (settings.mode or "browser").lower() == "browser"
+                else "direct_rtsp"
+            )
+        try:
+            return processor.update_camera_settings(
+                source_mode=source_mode,
+                source=settings.source,
+                frigate_host=settings.frigate_host,
+                frigate_camera_name=settings.frigate_camera_name,
+                rtsp_transport=settings.rtsp_transport,
+                target_fps=settings.target_fps,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/access-event")
     def access_event(event: AccessEvent) -> dict[str, object]:

@@ -322,12 +322,22 @@
         <h2>Camera source</h2>
         <label class="hint" for="cameraModeSelect">Source type</label>
         <select id="cameraModeSelect" style="width:100%; margin-top:6px;">
-          <option value="browser">Browser webcam</option>
-          <option value="ip">IP / RTSP camera</option>
+          <option value="webcam">Browser webcam</option>
+          <option value="direct_rtsp">Direct IP / RTSP camera</option>
+          <option value="frigate_restream">Frigate / go2rtc restream</option>
         </select>
         <div id="ipFields" style="display:none; margin-top:10px;">
-          <label class="hint" for="cameraUrl">Stream URL (RTSP/HTTP)</label>
-          <input id="cameraUrl" autocomplete="off" placeholder="rtsp://admin:pass@192.168.1.64:554/Streaming/Channels/102" style="width:100%; margin-top:6px;">
+          <div id="directRtspFields">
+            <label class="hint" for="cameraUrl">Stream URL (RTSP/HTTP)</label>
+            <input id="cameraUrl" autocomplete="off" placeholder="rtsp://admin:pass@192.168.1.64:554/Streaming/Channels/102" style="width:100%; margin-top:6px;">
+          </div>
+          <div id="frigateFields" style="display:none;">
+            <label class="hint" for="frigateHost">Frigate host</label>
+            <input id="frigateHost" autocomplete="off" placeholder="frigate or 192.168.1.10" style="width:100%; margin-top:6px;">
+            <label class="hint" for="frigateCameraName" style="display:block;margin-top:8px;">Frigate camera name</label>
+            <input id="frigateCameraName" autocomplete="off" placeholder="gate01" style="width:100%; margin-top:6px;">
+            <p class="hint">Analytics reads <code>rtsp://HOST:8554/CAMERA_sub</code>. Camera credentials stay inside Frigate.</p>
+          </div>
           <div style="display:flex; gap:8px; margin-top:8px;">
             <select id="rtspTransport" style="flex:1; min-width:0;">
               <option value="tcp">TCP</option>
@@ -549,20 +559,36 @@
     }
 
     let cameraFormInit = false;
+    function showSourceFields(sourceMode) {
+      const serverOwned = sourceMode !== "webcam";
+      document.getElementById("ipFields").style.display =
+        serverOwned ? "block" : "none";
+      document.getElementById("directRtspFields").style.display =
+        sourceMode === "direct_rtsp" ? "block" : "none";
+      document.getElementById("frigateFields").style.display =
+        sourceMode === "frigate_restream" ? "block" : "none";
+    }
+
     function applyCameraMode(status) {
       const mode = status.camera_mode || "browser";
+      const sourceMode = status.source_mode ||
+        (mode === "ip" ? "direct_rtsp" : "webcam");
       cameraMode = mode;
       // Populate the settings form once, then keep the live IP status fresh.
       if (!cameraFormInit) {
         const modeSel = document.getElementById("cameraModeSelect");
         if (modeSel) {
-          modeSel.value = mode;
+          modeSel.value = sourceMode;
           const url = status.camera_source && status.camera_source !== "0"
             ? status.camera_source : "";
           document.getElementById("cameraUrl").value = url;
+          document.getElementById("frigateHost").value =
+            status.frigate_host || "";
+          document.getElementById("frigateCameraName").value =
+            status.frigate_camera_name || "gate01";
           document.getElementById("rtspTransport").value = status.rtsp_transport || "tcp";
           document.getElementById("targetFps").value = status.target_fps || 12;
-          document.getElementById("ipFields").style.display = mode === "ip" ? "block" : "none";
+          showSourceFields(sourceMode);
           cameraFormInit = true;
         }
       }
@@ -790,6 +816,13 @@
         const delivery = event.telegram_photo_sent || event.telegram_video_sent
           ? `<div class="delivery">Telegram: ${event.telegram_photo_sent ? "image sent" : "image pending"} · ${event.telegram_video_sent ? "video sent" : "video pending"}</div>`
           : "";
+        const frigate = event.frigate_clip_url
+          ? `<div class="delivery">Frigate: <a href="${event.frigate_clip_url}" target="_blank">recording clip</a>${event.frigate_export_id ? ` · export ${event.frigate_export_id}` : ""}</div>`
+          : event.frigate_ok === false
+            ? `<div class="delivery" style="color:var(--amber)">Frigate unavailable · local evidence and Telegram kept working</div>`
+            : event.clip_pending
+              ? '<div class="delivery">Frigate bridge waits for local evidence…</div>'
+              : "";
         const media = (images || clip) ? `<div class="media">${images}</div>${clip}` : "";
         return `<div class="event">
           <div class="event-top">
@@ -799,6 +832,7 @@
           <div class="event-bottom">Tracker ${event.tracker_id} · ${event.reason}</div>
           ${media}
           ${delivery}
+          ${frigate}
         </div>`;
       }).join("");
     }
@@ -1400,14 +1434,20 @@
       } catch (error) { setMessage(error.message, true); }
     });
     document.getElementById("cameraModeSelect").addEventListener("change", event => {
-      document.getElementById("ipFields").style.display =
-        event.target.value === "ip" ? "block" : "none";
+      showSourceFields(event.target.value);
     });
     document.getElementById("saveCamera").addEventListener("click", async () => {
-      const mode = document.getElementById("cameraModeSelect").value;
+      const sourceMode = document.getElementById("cameraModeSelect").value;
       const url = document.getElementById("cameraUrl").value.trim();
-      if (mode === "ip" && !url) {
+      const frigateHost = document.getElementById("frigateHost").value.trim();
+      const frigateCameraName =
+        document.getElementById("frigateCameraName").value.trim();
+      if (sourceMode === "direct_rtsp" && !url) {
         setMessage("Enter the IP camera stream URL.", true);
+        return;
+      }
+      if (sourceMode === "frigate_restream" && !frigateCameraName) {
+        setMessage("Enter the Frigate camera name.", true);
         return;
       }
       const button = document.getElementById("saveCamera");
@@ -1418,8 +1458,10 @@
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
-            mode,
-            source: mode === "ip" ? url : "0",
+            source_mode: sourceMode,
+            source: sourceMode === "direct_rtsp" ? url : "0",
+            frigate_host: frigateHost,
+            frigate_camera_name: frigateCameraName || "gate01",
             rtsp_transport: document.getElementById("rtspTransport").value,
             target_fps: Number(document.getElementById("targetFps").value) || 12
           })

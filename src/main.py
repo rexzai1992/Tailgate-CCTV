@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from dotenv import load_dotenv
 import uvicorn
 
 from .web_server import create_web_app
@@ -19,6 +20,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    load_dotenv()
     args = parse_args()
     config_path = Path(args.config).expanduser().resolve()
     app = create_web_app(config_path)
