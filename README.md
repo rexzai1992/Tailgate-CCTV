@@ -1,331 +1,360 @@
-# Tailgate-CCTV
+# Gym Sentry
 
-Gym Sentry is a one-camera, anonymous people IN/OUT counter with group-entry
-capture. The camera detects and tracks people; it does **not** recognize faces
-or identify anyone.
+Gym Sentry is a local, one-camera people counter and tailgating detector for
+gyms, offices, and controlled entrances.
 
-The default detection rule is:
+It detects and tracks people crossing a configurable line, records suspicious
+group entries, saves local evidence, and can send Telegram alerts. It does
+**not** recognize faces or identify people.
 
-- 1 person enters = normal
-- A second, distinct tracked person follows within 4 seconds = capture them
-- Additional people entering inside the same rolling window are also captured
-- Repeated crossings from the same tracker cannot form a tailgating group
+## Features
 
-Change `minimum_people` or `tailgating_time_window_seconds` in `config.yaml` to
-adjust this rule.
+- Anonymous IN/OUT people counting with YOLO tracking
+- Browser webcam, USB camera, and direct RTSP camera support
+- Configurable doorway focus area and directional counting line
+- Group-entry and access-token tailgating modes
+- Tailgating snapshots, body crops, optional face crops, and short clips
+- Gate or turnstile movement detection
+- Telegram photo, video, and test notifications
+- CSV logs and a live local dashboard
+- Local HTTP API for access-control and camera-system plugins
 
-## Install
+## Quick start
 
-Python 3.11 or 3.12 is recommended because computer-vision package support can
-lag behind the newest Python release.
+Python 3.11 or 3.12 is recommended.
 
 ```bash
+git clone https://github.com/rexzai1992/Tailgate-CCTV.git
+cd Tailgate-CCTV
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+
 cp config.example.yaml config.yaml
-```
-
-Ultralytics downloads the configured person-detection model on first launch if
-the model is not already present.
-
-## Run
-
-Run the local web server:
-
-```bash
+cp .env.example .env
 python -m src.main
 ```
 
 Open:
 
-<http://127.0.0.1:8080/>
+- Dashboard: <http://127.0.0.1:8080/>
+- API documentation: <http://127.0.0.1:8080/docs>
+- Health check: <http://127.0.0.1:8080/health>
 
-To connect Gym Sentry to an access-control, membership, kiosk, or external
-camera system, see [Plugin Integration Guide](PLUGIN_INTEGRATION.md).
+Ultralytics downloads the configured YOLO model on first launch if it is not
+already present.
 
-The browser asks for camera permission and displays the live camera on the
-dashboard. Use the camera selector to switch between built-in, USB, or other
-browser-visible cameras. Sampled frames are sent only to the local Python
-server for anonymous YOLO tracking.
+## First-time setup
 
-## Web controls
+1. Open the dashboard and allow camera access.
+2. Select the correct built-in or USB camera.
+3. Draw a focus area around the doorway if focus is required.
+4. Draw the counting line across the entrance.
+5. Confirm the green **IN** arrow points in the entry direction.
+6. Optionally enable OUT counting, a door zone, or a gate zone.
+7. Click **Save setup**.
+8. Walk through the entrance in both directions and verify the counters.
 
-- **Start camera** — request browser camera permission or restart the selected camera
-- **Camera selector** — switch between cameras exposed by the browser
-- **Refresh cameras** — rescan USB cameras; newly connected cameras are also
-  detected automatically and selected when possible
-- **Draw focus area** — click two opposite doorway corners for a box, or click
-  three or more points for an arbitrary doorway shape, then **Finish focus**; the
-  dashboard, person detection, and event snapshots use only this region and
-  anything outside the shape is masked out (never detected)
-- **Show full camera** — remove the crop and return to the full camera image
-- **Reset counts** — reset IN/OUT totals
-- **Reset tracking** — clear tracker IDs and detection windows (entry burst and
-  door-zone memory) without changing the IN/OUT totals
-- **Draw counting line** — click two points over the live video. A green **IN**
-  arrow and "IN — TOWARD CAMERA" label show the entry direction
-- **Show OUT arrow** — toggle OUT counting on or off. While off (the default),
-  only IN crossings are counted, no OUT arrow is drawn, and OUT crossings are
-  ignored; turning it on draws the red **OUT** arrow and counts OUT crossings
-- **Diagnostics** — show tracker ID, line side, distance, and crossing readiness
-- **Draw door zone** — click polygon points and then **Finish zone**
-- **Draw gate zone** / **Clear gate** — click 3+ points tightly around the
-  gate/turnstile to detect its movement (see *Gate movement detection*)
-- **Save setup** — persist line and zone coordinates to `config.yaml`
+Camera selection and completed drawing changes are also saved automatically.
+The browser and `config.yaml` remember the selected USB camera.
 
-Camera selection and completed drawing changes are saved automatically.
-**Save setup** also provides an explicit save. The selected camera is remembered
-in both `config.yaml` and browser storage so a page refresh reconnects to the
-same USB camera when it is available. If that camera is missing, Gym Sentry
-pauses instead of silently opening a different camera.
+For physical installation and acceptance testing, follow
+[FIELD_TEST.md](FIELD_TEST.md).
 
-The counting line is directional. With the default left-to-right horizontal
-line and a front-facing camera, movement toward the lower side of the image
-(toward the camera) is IN. This uses `counting_line.in_side: positive`.
+## Tailgating detection modes
 
-Draw the focus area before positioning the counting line. Once focus is
-enabled, the camera preview is cropped to that doorway region and the server
-never receives the rest of the frame for detection or event capture.
-Counting and tailgating detection remain paused while the required focus area
-is disabled.
+### Entry burst mode
 
-## Security evidence and logs
+This is the default mode:
 
-Only a tailgating event causes a screenshot to be saved. The full camera frame
-inside the configured focus area is stored with a red box around the suspected
-anonymous tracker:
-
-```text
-captures/tailgating/tailgating_YYYYMMDD_HHMMSS_main-entrance_id23.jpg
+```yaml
+tailgating:
+  detection_mode: entry_burst
+  minimum_people: 2
+  tailgating_time_window_seconds: 4
 ```
 
-When a usable frontal or profile face is visible inside the suspected
-follower's person box, Gym Sentry also saves an enlarged close-up:
+The default rule is:
 
-```text
-captures/tailgating/faces/tailgating_YYYYMMDD_HHMMSS_main-entrance_id23_face.jpg
+- The first distinct person entering is normal.
+- A second person entering within four seconds triggers capture.
+- Additional distinct people inside the same rolling window are captured.
+- Repeated crossings by the same tracker do not form a group.
+
+This mode does not use external authorization tokens.
+
+### Access-token mode
+
+Use this mode when Gym Sentry is connected to a membership, card, QR,
+fingerprint, face-access, or other authorization system:
+
+```yaml
+tailgating:
+  detection_mode: access_token
+  token_valid_seconds: 6
+  max_people_per_token: 1
 ```
 
-The detected follower's visible body/person box is saved separately:
+After approving access, the external system sends:
 
-```text
-captures/tailgating/bodies/tailgating_YYYYMMDD_HHMMSS_main-entrance_id23_body.jpg
+```http
+POST /access-event
 ```
 
-This is face **detection only**. It does not recognize, identify, enroll, or
-compare faces. If the person is turned away, blurred, too small, or poorly lit,
-no face close-up is saved and the normal event screenshot remains available.
+One valid token permits the configured number of IN crossings. An entry without
+a valid token is recorded as `TAILGATING_DETECTED`.
 
-Every ordinary IN crossing also captures a face close-up when a face is visible,
-saved under `captures/entries/faces/` and listed in the **Recent entries** panel.
-This is still face **detection only** — captured entry faces are not matched
-against members or identified. Set `entry_capture.capture_face: false` in
-`config.yaml` to turn this off and keep ordinary entries fully anonymous.
+See [PLUGIN_INTEGRATION.md](PLUGIN_INTEGRATION.md) for payloads, Python and
+JavaScript examples, frame submission, security guidance, and the compatibility
+contract.
 
-Face close-ups (both tailgating and entry) are not taken from a single frame.
-While a person is tracked, each frame's face is scored by sharpness (Laplacian
-variance) and size, and the **best** frame seen is the one saved — so the
-close-up is a stable, in-focus shot rather than whatever frame the crossing
-happened to land on.
+## Camera sources
 
-Security events are appended to `logs/security_events.csv`. All ordinary IN and
-OUT crossings continue to be appended to `logs/people_count_log.csv`.
+### Browser or USB camera
 
-`save_event_clip: true` (enabled by default) saves a short clip for each
-confirmed `TAILGATING_DETECTED` event under `captures/tailgating/clips/`. The
-clip is roughly 5 seconds total — `clip_pre_seconds` (default 2) before the
-event plus `clip_post_seconds` (default 3) after. To save disk space, the softer
-`POSSIBLE_TAILGATING` door-zone events do not record a clip, and the rolling
-buffer is sampled at `clip_fps` rather than full frame rate. Set
-`save_event_clip: false` to turn clips off entirely.
+The default `webcam` mode uses camera devices exposed by the browser:
 
-Every saved photo and every video frame has the capture date and time burned
-into the bottom-right corner. The dashboard shows snapshots, body and face
-close-ups as inline thumbnails (click to open full size) and plays the event
-clip directly in the **Recent security events** panel.
+```yaml
+camera:
+  source_mode: webcam
+```
+
+Use **Refresh cameras** after connecting a new USB camera. If the saved camera
+is unavailable, Gym Sentry pauses instead of silently selecting another one.
+
+### Direct IP or RTSP camera
+
+Gym Sentry can read a network camera directly on the server:
+
+```yaml
+camera:
+  source_mode: direct_rtsp
+  source: "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102"
+  rtsp_transport: tcp
+  target_fps: 12
+```
+
+For Hikvision cameras, channel `101` is commonly the main stream and `102` the
+lighter sub-stream. Verify the URL in VLC before configuring Gym Sentry.
+
+The server reconnects automatically after a stream interruption. Keep camera
+credentials private because `config.yaml` contains the complete URL.
+
+## Dashboard controls
+
+- **Start camera** requests browser camera permission or restarts capture.
+- **Camera selector** switches between browser-visible cameras.
+- **Refresh cameras** rescans built-in and USB devices.
+- **Draw focus area** limits all processing and evidence to the doorway.
+- **Show full camera** removes the configured focus crop.
+- **Draw counting line** creates the directional crossing line.
+- **Show OUT arrow** enables or disables OUT counting.
+- **Diagnostics** shows tracker and crossing-state details.
+- **Draw door zone** creates an optional restricted-entry polygon.
+- **Draw gate zone** outlines a moving gate, door, or turnstile component.
+- **Reset counts** clears IN/OUT totals and recent runtime state.
+- **Reset tracking** clears tracker IDs without changing IN/OUT totals.
+- **Save setup** persists the current geometry in `config.yaml`.
+
+The counting point is the bottom-center of each person box. The crossing guard
+rejects implausibly large one-frame jumps and rate-limits repeated crossings by
+the same tracker.
+
+## Focus area and privacy
+
+The focus area can be a two-corner rectangle or a polygon with three or more
+points. When enabled:
+
+- only the doorway region is sent to the detector;
+- pixels outside an irregular polygon are masked;
+- event snapshots and clips contain only the processed region;
+- counting pauses if a required focus area is not configured.
+
+Gym Sentry uses face **detection only** for optional close-up evidence. It does
+not identify, enroll, compare, or recognize faces.
+
+To disable ordinary entry face captures:
+
+```yaml
+entry_capture:
+  capture_face: false
+```
+
+External identity authorization must come from the connected access system.
+
+## Evidence and logs
+
+Confirmed security events can create:
+
+```text
+captures/tailgating/
+├── tailgating_YYYYMMDD_HHMMSS_main-entrance_id23.jpg
+├── bodies/
+├── faces/
+└── clips/
+```
+
+Evidence behavior is controlled by:
+
+```yaml
+tailgating:
+  capture_snapshot: true
+  capture_body_closeup: true
+  capture_face_closeup: true
+  save_event_clip: true
+  clip_pre_seconds: 3
+  clip_post_seconds: 0
+  clip_fps: 10
+```
+
+Face candidates are sampled while a person is tracked. Gym Sentry saves the
+best available crop based on sharpness and size rather than relying only on the
+crossing frame. If no usable face is visible, the normal event snapshot and
+body evidence remain available.
+
+Runtime logs:
+
+| File | Contents |
+|---|---|
+| `logs/people_count_log.csv` | IN and OUT crossing records |
+| `logs/security_events.csv` | Tailgating and possible-tailgating events |
+| `logs/gate_events.csv` | Gate movement start and end records |
+
+Photos and video frames include a local date/time overlay.
 
 ## Telegram alerts
 
-The dashboard includes a **Telegram alerts** panel. When enabled, each
-tailgating event sends an immediate notification with the evidence snapshot,
-then sends the MP4 video after the post-event recording window finishes. Both
-messages include the event date, time, and local timezone.
+The dashboard can send a snapshot immediately after a tailgating event and the
+MP4 clip after recording finishes.
 
-1. Create a bot with `@BotFather`.
-2. Open the new bot in Telegram and send `/start`.
-3. Paste the bot token into Gym Sentry.
-4. Click **Find chat ID**, enable alerts, and click **Save**.
-5. Click **Send test notification**.
+1. Create a Telegram bot with `@BotFather`.
+2. Open the new bot and send `/start`.
+3. Paste the bot token into the **Telegram alerts** panel.
+4. Click **Find chat ID**.
+5. Enable alerts and save.
+6. Click **Send test notification**.
 
-The token is stored locally in `secrets/telegram.json` with restricted file
-permissions. The `secrets/` directory is excluded from Git.
+Telegram settings are stored locally in:
 
-## Optional door zone
+```text
+secrets/telegram.json
+```
 
-Use **Draw door zone** in the dashboard to enable the restricted entrance
-polygon. If multiple tracked people occupy that zone while there are fewer
-available authorization uses, Gym Sentry records a
-`POSSIBLE_TAILGATING` event. An actual unauthorized IN crossing is always
-recorded as `TAILGATING_DETECTED`.
+The `secrets/` directory is excluded from Git.
+
+The notification endpoint can also be tested from the local machine:
+
+```bash
+curl -X POST http://127.0.0.1:8080/telegram/test
+```
 
 ## Gate movement detection
 
-Use **Draw gate zone** to outline the gate, turnstile arm, or door leaf with a
-tight polygon. Gym Sentry then detects **movement** inside that zone by
-frame-differencing (OpenCV) — no extra model or hardware. The dashboard **Gate**
-card shows `STILL`, `MOVING`, or `OFF`, and the **Gate activity** panel lists
-each movement episode with its duration. Start/end events are appended to
-`logs/gate_events.csv`.
-
-This detects motion, not an open/closed latch: anything changing in the zone
-(including a person walking through it) registers, so keep the polygon tight to
-the moving part. Tune sensitivity in `config.yaml`:
+Draw a tight polygon around a gate, turnstile arm, or door leaf. Gym Sentry uses
+OpenCV frame differencing and reports `STILL`, `MOVING`, or `OFF`.
 
 ```yaml
 gate_zone:
   enabled: false
   points: []
-  motion_threshold: 0.02   # fraction of zone pixels that must change
-  idle_seconds: 1.0        # stillness before a movement is considered over
+  motion_threshold: 0.02
+  idle_seconds: 1.0
 ```
 
-## Counting accuracy
+This detects movement, not the physical open/closed latch state. Keep the zone
+tight because a person moving through it can also trigger motion.
 
-The counting line uses the bottom-center of each person box (their feet). On a
-single camera this point can jump — for example when the feet leave the frame
-near the camera and the box bottom snaps upward — which would otherwise produce
-a phantom reverse crossing. A guard ignores any "crossing" where the point jumps
-more than `counting_line.max_jump_percent` (default `0.5`, i.e. 50% of frame
-height) in one frame. Repeated crossings by the same tracker are also rate
-limited so one lingering person cannot inflate the counts.
+## Local API
+
+The main integration endpoints are:
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | Service health check |
+| `GET` | `/status` | Counts, camera state, security state, and recent events |
+| `POST` | `/access-event` | Add an approved external authorization |
+| `POST` | `/process-frame` | Process raw JPEG bytes from an external camera plugin |
+| `GET` | `/video-feed` | MJPEG output when direct RTSP mode is active |
+
+The API has no built-in authentication. It listens on `127.0.0.1` by default.
+Do not expose port `8080` directly to the public internet. Use an authenticated
+reverse proxy or private VPN if another machine must connect.
 
 ## Configuration
 
-The requested defaults are in `config.yaml`:
+Start from [config.example.yaml](config.example.yaml). Important sections:
 
-```yaml
-tailgating:
-  enabled: true
-  detection_mode: "entry_burst"
-  minimum_people: 2
-  token_valid_seconds: 6
-  max_people_per_token: 1
-  tailgating_time_window_seconds: 4
-  capture_snapshot: true
-  capture_body_closeup: true
-  body_padding_percent: 0.12
-  capture_face_closeup: true
-  face_padding_percent: 0.3
-  min_face_pixels: 36
-  save_event_clip: true
-  clip_pre_seconds: 2
-  clip_post_seconds: 3
-  snapshot_dir: "captures/tailgating"
-  alert_cooldown_seconds: 5
-  show_alert_on_screen: true
-  keyboard_test_key: "a"
-```
+- `camera` — camera name, source mode, stream, and target FPS
+- `detection` — YOLO model, confidence, IoU, tracker, device, and image size
+- `counting_line` — direction, cooldown, travel, and jump protection
+- `focus_area` — doorway crop and privacy mask
+- `tailgating` — detection mode, thresholds, evidence, clips, and alerts
+- `entry_capture` — ordinary-entry face capture and sampling
+- `door_zone` — optional restricted doorway polygon
+- `gate_zone` — movement detection settings
+- `api` — local host and port
+- `logging` — CSV output paths
 
-In `entry_burst` mode, access tokens are not used for capture decisions.
-
-The browser stores the doorway crop in:
-
-```yaml
-focus_area:
-  enabled: true
-  points:
-    - [0.55, 0.15]
-    - [0.85, 0.95]
-```
-
-## Performance and operations
-
-The server keeps up with the camera by tuning a few knobs:
-
-- **Face sampling** — face detection (Haar) is the heaviest per-frame cost, so
-  it runs only every Nth processed frame. Set `entry_capture.face_sample_every`
-  (default `4`); a crossing still grabs a face on the spot if none is buffered.
-- **Inference device/size** — set `detection.device` (`cpu`, `mps` on Apple
-  Silicon, `cuda`, or a GPU index) and `detection.imgsz` (e.g. `480` for faster,
-  lower-resolution inference). Both are optional; omit them for auto defaults.
+Performance tuning example:
 
 ```yaml
 detection:
   model: yolo11n.pt
-  device: cpu      # or mps / cuda / 0
-  imgsz: 640       # lower (e.g. 480) = faster, less accurate
+  device: cpu
+  imgsz: 640
+
 entry_capture:
   face_sample_every: 4
 ```
 
-The dashboard **auto-reconnects** the camera if the stream ends (laptop sleep,
-USB unplug, or the OS reclaiming the device) — it retries shortly after the drop
-instead of staying dark.
+Supported inference devices depend on the installed PyTorch build and may
+include `cpu`, `mps`, `cuda`, or a GPU index.
 
-The live **AI processing FPS** is shown in the camera toolbar.
+## Tests
 
-## IP / RTSP camera (Hikvision, etc.)
-
-Gym Sentry can open a network camera **directly** — the server reads the stream,
-runs detection, and streams the annotated video to the dashboard. No browser
-webcam, no capture card, no extra software.
-
-1. Put the camera on the same LAN (PoE switch or its 12V adapter + Ethernet).
-2. Find its RTSP URL. Hikvision sub-stream (recommended — lighter for YOLO):
-   ```
-   rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102
-   ```
-   (Use SADP or the router's device list to find the IP; `101` is the main
-   stream, `102` the sub-stream.) Confirm it plays in VLC first.
-3. Switch Gym Sentry to direct RTSP mode in `config.yaml`:
-   ```yaml
-   camera:
-     source_mode: direct_rtsp
-     source: "rtsp://admin:PASSWORD@192.168.1.64:554/Streaming/Channels/102"
-     rtsp_transport: tcp
-     target_fps: 12
-   ```
-4. Restart (`python -m src.main`) and open the dashboard. The live view comes
-   from `/video-feed`; counting, gate, clips, and Telegram all work as usual.
-   Draw the counting line / zones directly over the streamed image.
-
-The stream auto-reconnects if it drops. Keep credentials in `config.yaml`
-private. Set `source_mode: webcam` to return to the local webcam.
-
-## External camera troubleshooting
-
-If a USB camera is connected after the page opens, wait for automatic
-detection or click **Refresh cameras**, then select it from the camera list.
-If it still does not appear:
-
-- Confirm the browser has camera permission for `127.0.0.1`.
-- Close Zoom, FaceTime, OBS, or another app that may exclusively hold the camera.
-- Unplug and reconnect the camera, then refresh the dashboard.
-- On macOS, verify the browser under **System Settings → Privacy & Security →
-  Camera**.
-
-## Test the non-camera logic
-
-The core token, crossing, polygon, and tailgating tests use only the Python
-standard library:
+Run the automated suite:
 
 ```bash
+source .venv/bin/activate
 python -m unittest discover -v
 ```
 
-The automated suite includes normal entry, close follower, line stopping,
-turnaround, same-person jitter, and side-by-side scenarios. Complete the real
-camera acceptance checklist in [`FIELD_TEST.md`](FIELD_TEST.md) after mounting
-or moving the entrance camera.
+The suite covers authorization tokens, directional crossings, jitter and jump
+guards, entry bursts, evidence capture, gate movement, Telegram behavior, and
+setup validation.
 
-## Limitations and camera placement
+## Troubleshooting
 
-- One camera cannot be 100% accurate.
-- Crowded or heavily occluded entrances reduce tracking accuracy.
-- Camera angle, lighting, and line placement strongly affect results.
-- A strong setup is roughly 2.7–3.2 m high and angled 30–45° downward.
-- This project has no face recognition. Any visible face is merely part of the
-  camera frame; identity authorization must come from the external access
-  system, API, keyboard mock, or another test input.
+### Browser camera is unavailable
+
+- Allow camera permission for `127.0.0.1`.
+- Close Zoom, FaceTime, OBS, or another program using the camera.
+- Reconnect the USB camera and click **Refresh cameras**.
+- On macOS, check **System Settings → Privacy & Security → Camera**.
+
+### RTSP stream does not connect
+
+- Confirm the URL plays in VLC.
+- Prefer the camera sub-stream for lower CPU usage.
+- Confirm the camera and Gym Sentry are on reachable networks.
+- Try `rtsp_transport: tcp`.
+- Check that the username, password, IP address, and channel are correct.
+
+### Detection is slow
+
+- Lower `detection.imgsz`, for example from `640` to `480`.
+- Increase `entry_capture.face_sample_every`.
+- Use a lighter camera stream or lower `target_fps`.
+- Configure the appropriate `mps` or `cuda` device when available.
+
+## Limitations
+
+- One camera cannot be perfectly accurate in every doorway.
+- Crowds and heavy occlusion reduce tracker reliability.
+- Camera angle, lighting, focus area, and counting-line placement matter.
+- A useful starting position is approximately 2.7-3.2 m high and angled
+  30-45 degrees downward.
+- Gym Sentry is a local monitoring tool, not an identity or biometric access
+  system.
