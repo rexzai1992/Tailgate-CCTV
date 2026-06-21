@@ -4,10 +4,6 @@ Gym Sentry is a one-camera, anonymous people IN/OUT counter with group-entry
 capture. The camera detects and tracks people; it does **not** recognize faces
 or identify anyone.
 
-Frigate NVR can be used as the 24/7 recording, playback, camera-wall, and
-go2rtc restream layer while this application keeps all analytics and Telegram
-behavior. See [Frigate NVR integration](docs/frigate-integration.md).
-
 The default detection rule is:
 
 - 1 person enters = normal
@@ -45,6 +41,9 @@ python -m src.main
 Open:
 
 <http://127.0.0.1:8080/>
+
+To connect Gym Sentry to an access-control, membership, kiosk, or external
+camera system, see [Plugin Integration Guide](PLUGIN_INTEGRATION.md).
 
 The browser asks for camera permission and displays the live camera on the
 dashboard. Use the camera selector to switch between built-in, USB, or other
@@ -293,10 +292,7 @@ webcam, no capture card, no extra software.
    Draw the counting line / zones directly over the streamed image.
 
 The stream auto-reconnects if it drops. Keep credentials in `config.yaml`
-private. Set `source_mode: webcam` to return to the local webcam. For
-production, prefer `source_mode: frigate_restream` so camera credentials and
-24/7 recording remain inside Frigate; see
-[Frigate NVR integration](docs/frigate-integration.md).
+private. Set `source_mode: webcam` to return to the local webcam.
 
 ## External camera troubleshooting
 

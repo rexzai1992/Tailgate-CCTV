@@ -1,9 +1,7 @@
 fastapi>=0.115
-httpx>=0.28
 lap>=0.5.12
 numpy>=2.0
 opencv-python>=4.10
-paho-mqtt>=2.1
 PyYAML>=6.0
 python-dotenv>=1.0
 requests>=2.32

@@ -8,8 +8,6 @@ camera:
   browser_device_label: ''
   mode: browser
   source_mode: webcam
-  frigate_host: frigate
-  frigate_camera_name: gate01
   rtsp_transport: tcp
   target_fps: 12.0
 detection:
