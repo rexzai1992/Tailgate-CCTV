@@ -93,7 +93,7 @@ class TelegramNotifier:
         me = self._request("getMe", token=token, timeout=15).get("result") or {}
         username = str(me.get("username") or "")
         text = (
-            "✅ Gym Sentry Telegram connection is working.\n"
+            "✅ CCTV Tailgate Telegram connection is working.\n"
             "Tailgating alerts will include an evidence image and event video."
         )
         self._request(

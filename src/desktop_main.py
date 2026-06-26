@@ -325,7 +325,7 @@ def main() -> int:
 
     try:
         model = YOLO(str(detection_config.get("model", "yolo11n.pt")))
-        window_name = f"Gym Sentry - {camera_name}"
+        window_name = f"CCTV Tailgate - {camera_name}"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
         while True:

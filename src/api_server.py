@@ -19,7 +19,7 @@ class AccessEvent(BaseModel):
 
 
 def create_app(token_store: AccessTokenStore) -> FastAPI:
-    app = FastAPI(title="Gym Sentry Access Event API", version="1.0")
+    app = FastAPI(title="CCTV Tailgate Access Event API", version="1.0")
 
     @app.get("/", response_class=HTMLResponse)
     def home() -> str:
@@ -29,7 +29,7 @@ def create_app(token_store: AccessTokenStore) -> FastAPI:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gym Sentry Access Test</title>
+  <title>CCTV Tailgate Access Test</title>
   <style>
     body { font-family: system-ui, sans-serif; background: #101418; color: #eef2f5;
            max-width: 560px; margin: 0 auto; padding: 40px 20px; }
@@ -48,7 +48,7 @@ def create_app(token_store: AccessTokenStore) -> FastAPI:
 </head>
 <body>
   <main>
-    <h1>Gym Sentry</h1>
+    <h1>CCTV Tailgate</h1>
     <p>Camera access-event test console</p>
     <label for="camera">Camera name</label>
     <input id="camera" value="Main Entrance">
@@ -86,7 +86,7 @@ def create_app(token_store: AccessTokenStore) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, object]:
-        return {"ok": True, "service": "gym-sentry-access-api"}
+        return {"ok": True, "service": "cctv-tailgate-access-api"}
 
     @app.post("/access-event")
     def access_event(event: AccessEvent) -> dict[str, object]:

@@ -11,7 +11,7 @@ from .web_server import create_web_app
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Web-based Gym Sentry camera and tailgating dashboard"
+        description="Web-based CCTV Tailgate camera and tailgating dashboard"
     )
     parser.add_argument("--config", default="config.yaml", help="YAML configuration path")
     parser.add_argument("--host", default=None, help="Override configured web host")
@@ -28,7 +28,7 @@ def main() -> int:
     api_config = config.get("api", {})
     host = args.host or str(api_config.get("host", "127.0.0.1"))
     port = args.port or int(api_config.get("port", 8080))
-    print(f"Gym Sentry web dashboard: http://{host}:{port}/")
+    print(f"CCTV Tailgate web dashboard: http://{host}:{port}/")
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
     return 0
 

@@ -1513,7 +1513,48 @@ def create_web_app(
     captures_dir = Path("captures").resolve()
     captures_dir.mkdir(parents=True, exist_ok=True)
 
-    app = FastAPI(title="Gym Sentry Web", version="2.0")
+    app = FastAPI(
+        title="CCTV Tailgate",
+        version="2.0",
+        description=(
+            "CCTV Tailgate detection service. Counts entries across a virtual "
+            "line, detects tailgating in either group-entry (`entry_burst`) or "
+            "external-authorization (`access_token`) mode, captures evidence, and "
+            "persists a queryable event history.\n\n"
+            "**Integrating a plugin?** Depend only on the endpoints tagged "
+            "**Plugin API** plus this published schema. The `Controls`, "
+            "`Telegram`, and `Dashboard` endpoints are operational tooling and may "
+            "change.\n\n"
+            "The service has no built-in authentication and defaults to "
+            "`127.0.0.1`. Place it behind an authenticated proxy or VPN if another "
+            "machine must reach it."
+        ),
+        openapi_tags=[
+            {
+                "name": "Plugin API",
+                "description": (
+                    "Stable contract for external integrations: health, status, "
+                    "event history, access authorizations, and frame processing."
+                ),
+            },
+            {
+                "name": "Controls",
+                "description": (
+                    "Administrative controls for camera source, detection "
+                    "settings, live search, and counters. Intended for trusted "
+                    "setup tools, not member scans."
+                ),
+            },
+            {
+                "name": "Telegram",
+                "description": "Configure, discover, and test Telegram alert delivery.",
+            },
+            {
+                "name": "Dashboard",
+                "description": "Browser-facing dashboard page and live MJPEG stream.",
+            },
+        ],
+    )
     app.state.gym_sentry_config = config
     app.state.processor = processor
 
@@ -1525,27 +1566,42 @@ def create_web_app(
         name="captures",
     )
 
-    @app.get("/")
+    @app.get("/", tags=["Dashboard"], summary="Dashboard page", include_in_schema=False)
     def dashboard() -> FileResponse:
         return FileResponse(
             dashboard_path,
             headers={"Cache-Control": "no-store, max-age=0"},
         )
 
-    @app.get("/health")
+    @app.get("/health", tags=["Plugin API"], summary="Health check")
     def health() -> dict[str, object]:
-        return {"ok": True, "service": "gym-sentry-web"}
+        """Liveness probe. Returns `{"ok": true}` when the service is running.
 
-    @app.get("/status")
+        Call this on plugin startup and before retrying a failed request."""
+        return {"ok": True, "service": "cctv-tailgate"}
+
+    @app.get("/status", tags=["Plugin API"], summary="Live status snapshot")
     def status() -> dict[str, object]:
+        """Current counts, camera and security state, active tailgating
+        settings, persisted event totals, and short recent-event windows.
+
+        Poll every 1–5 seconds; the service has no outbound webhooks."""
         return processor.status()
 
-    @app.get("/events")
+    @app.get("/events", tags=["Plugin API"], summary="Query event history")
     def events(
         category: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, object]:
+        """Persistent crossing, security, and gate events (newest first).
+
+        - `category`: `security`, `crossing`, or `gate` (omit for all)
+        - `limit`: page size, 1–500 (default 50)
+        - `offset`: records to skip (default 0)
+
+        Returns `{items, total, limit, offset}`. Each item carries local
+        evidence URLs where available. Survives restarts and counter resets."""
         try:
             return processor.query_events(
                 category=category, limit=limit, offset=offset
@@ -1553,7 +1609,7 @@ def create_web_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/video-feed")
+    @app.get("/video-feed", tags=["Dashboard"], summary="Live MJPEG stream")
     def video_feed() -> StreamingResponse:
         stream = processor.ip_stream
         if stream is None:
@@ -1581,7 +1637,7 @@ def create_web_app(
             media_type="multipart/x-mixed-replace; boundary=frame",
         )
 
-    @app.post("/control/camera")
+    @app.post("/control/camera", tags=["Controls"], summary="Set camera source")
     def control_camera(settings: CameraSettings) -> dict[str, object]:
         source_mode = settings.source_mode
         if not source_mode:
@@ -1600,15 +1656,26 @@ def create_web_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/access-event")
+    @app.post("/access-event", tags=["Plugin API"], summary="Submit an authorized access event")
     def access_event(event: AccessEvent) -> dict[str, object]:
+        """Register one approved authorization (card, QR, face, fingerprint…).
+
+        Send only after access is granted; `event_type` must be
+        `face_id_authorized`. Creates one short-lived token the next IN crossing
+        consumes (`access_token` mode). Do not retry a `200` or you may create
+        duplicate tokens."""
         try:
             return processor.add_access_event(event)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/process-frame")
+    @app.post("/process-frame", tags=["Plugin API"], summary="Process a camera frame")
     async def process_frame(request: Request) -> dict[str, object]:
+        """Run detection on a single JPEG frame supplied by the plugin.
+
+        Body is raw JPEG bytes (`Content-Type: image/jpeg`), max 3 MB. Send
+        frames sequentially in order; 8–12 fps is a practical rate. Returns the
+        status fields plus `frame_width`, `frame_height`, and `tracks`."""
         content_length = int(request.headers.get("content-length", "0") or 0)
         if content_length > 3_000_000:
             raise HTTPException(status_code=413, detail="Camera frame is too large")
@@ -1620,51 +1687,63 @@ def create_web_app(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/control/reset")
+    @app.post("/control/reset", tags=["Controls"], summary="Reset counts")
     def reset() -> dict[str, object]:
+        """Zero IN/OUT counts and clear detection state. Event history is kept."""
         return processor.reset_counts()
 
-    @app.post("/control/reset-tracking")
+    @app.post("/control/reset-tracking", tags=["Controls"], summary="Reset tracking")
     def reset_tracking() -> dict[str, object]:
+        """Restart tracker IDs and detection windows without changing counts."""
         return processor.reset_tracking()
 
-    @app.post("/control/search")
+    @app.post("/control/search", tags=["Controls"], summary="Set live search")
     def control_search(payload: SearchPayload) -> dict[str, object]:
+        """Start or clear a live object / clothing-color search overlay."""
         return processor.update_search(payload.query)
 
-    @app.post("/control/tailgating")
+    @app.post("/control/tailgating", tags=["Controls"], summary="Configure tailgating detection")
     def control_tailgating(
         payload: TailgatingSettingsPayload,
     ) -> dict[str, object]:
+        """Set detection mode and thresholds; applied live and saved to config.
+
+        Changing `detection_mode` clears tokens and transient state but keeps
+        counts and history. Out-of-range values return `422`; an invalid mode
+        returns `400`."""
         try:
             return processor.update_tailgating_settings(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/control/setup")
+    @app.post("/control/setup", tags=["Controls"], summary="Save camera geometry")
     def save_setup(payload: SetupPayload) -> dict[str, object]:
+        """Persist focus area, counting line, door zone, and gate zone."""
         try:
             return processor.update_setup(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/telegram/settings")
+    @app.post("/telegram/settings", tags=["Telegram"], summary="Save Telegram settings")
     def telegram_settings(
         payload: TelegramSettingsPayload,
     ) -> dict[str, object]:
+        """Save the bot token, chat ID, and enabled flag for alert delivery."""
         return processor.save_telegram_settings(payload)
 
-    @app.post("/telegram/discover-chat")
+    @app.post("/telegram/discover-chat", tags=["Telegram"], summary="Discover Telegram chat")
     def telegram_discover_chat(
         payload: TelegramDiscoverPayload,
     ) -> dict[str, object]:
+        """Find the chat ID of a conversation that recently sent `/start`."""
         try:
             return processor.discover_telegram_chat(payload)
         except TelegramError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/telegram/test")
+    @app.post("/telegram/test", tags=["Telegram"], summary="Send test notification")
     def telegram_test() -> dict[str, object]:
+        """Send a test message to verify Telegram delivery."""
         try:
             return processor.test_telegram()
         except TelegramError as exc:

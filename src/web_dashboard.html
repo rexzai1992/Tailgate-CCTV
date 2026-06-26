@@ -3,68 +3,79 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tailgating Simulation Demo</title>
+  <title>CCTV Tailgate</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #080d12;
-      --panel: #111922;
-      --panel-2: #17222d;
-      --line: #273746;
-      --text: #f2f6f8;
-      --muted: #93a4b3;
-      --green: #42dc87;
-      --amber: #ffc449;
-      --blue: #3bb8ff;
-      --red: #ff4f63;
-      --purple: #b784ff;
+      --bg: #000000;
+      --panel: #111111;
+      --panel-2: #181818;
+      --line: #374151;
+      --line-soft: #20242b;
+      --text: #ffffff;
+      --muted: #9ca3af;
+      --accent: #ffffff;
+      --green: #4ade80;
+      --amber: #f5a623;
+      --blue: #d1d5db;
+      --red: #ef4444;
+      --purple: #b08cff;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
-      background:
-        radial-gradient(circle at 15% 0%, #132536 0, transparent 31rem),
-        var(--bg);
+      background: var(--bg);
       color: var(--text);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
         "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
     }
     button, select, input { font: inherit; }
     button {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px 14px;
-      background: #1b2834;
+      border-radius: 8px;
+      padding: 9px 13px;
+      background: var(--panel-2);
       color: var(--text);
+      font-size: 13px;
       cursor: pointer;
-      transition: transform .12s ease, border-color .12s ease, background .12s ease;
+      transition: border-color .14s ease, background .14s ease, color .14s ease, opacity .14s ease;
     }
-    button:hover { transform: translateY(-1px); border-color: #4c6579; }
-    button.primary { background: var(--green); color: #052012; border-color: var(--green); font-weight: 800; }
-    button.blue { background: #123e59; border-color: #23698f; }
-    button.danger { color: #ffb4bd; }
-    button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    button:hover { border-color: #4b5563; background: #202020; }
+    button.primary {
+      background: var(--accent); color: #000000; border-color: var(--accent); font-weight: 500;
+    }
+    button.primary:hover { background: #e6e6e6; border-color: #e6e6e6; }
+    button.blue { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+    button.blue:hover { border-color: #4b5563; background: #202020; }
+    button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+    button.ghost:hover { color: var(--text); background: var(--panel-2); }
+    button.danger { color: #f6a1a8; }
+    button.danger:hover { border-color: var(--red); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
     select {
-      min-width: 220px;
+      min-width: 200px;
       max-width: 320px;
-      padding: 10px 34px 10px 12px;
+      padding: 9px 32px 9px 12px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: #101820;
+      border-radius: 8px;
+      background: var(--panel);
       color: var(--text);
+      font-size: 13px;
     }
     .field { display: grid; gap: 6px; margin-top: 11px; }
     .field label { color: var(--muted); font-size: 12px; }
     .field input {
       width: 100%; padding: 10px 12px; border: 1px solid var(--line);
-      border-radius: 9px; background: #0d151c; color: var(--text);
+      border-radius: 8px; background: var(--panel); color: var(--text);
     }
+    .field input:focus, .find-row input:focus { outline: none; border-color: #6b7280; }
     .check-row {
       display: flex; align-items: center; gap: 8px; margin-top: 12px;
       color: #d7e5ef; font-size: 13px;
     }
-    .check-row input { width: 17px; height: 17px; }
+    .check-row input { width: 17px; height: 17px; accent-color: #fff; }
     .telegram-actions {
       display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px;
     }
@@ -73,7 +84,7 @@
     .find-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
     .find-row input {
       min-width: 0; width: 100%; padding: 10px 12px; border: 1px solid var(--line);
-      border-radius: 9px; background: #0d151c; color: var(--text);
+      border-radius: 8px; background: var(--panel); color: var(--text);
     }
     .find-status {
       min-height: 20px; margin-top: 10px; color: var(--muted);
@@ -82,27 +93,27 @@
     .find-status.found { color: var(--amber); font-weight: 700; }
     .find-status.error { color: var(--red); }
     header {
-      height: 70px;
+      height: 64px;
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 20px;
       padding: 0 24px;
-      border-bottom: 1px solid var(--line);
-      background: rgba(8, 13, 18, .82);
-      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--line-soft);
+      background: rgba(0, 0, 0, .85);
+      backdrop-filter: blur(14px);
       position: sticky;
       top: 0;
       z-index: 20;
     }
     .brand { display: flex; align-items: center; gap: 12px; }
     .logo {
-      width: 38px; height: 38px; display: grid; place-items: center;
-      border-radius: 11px; background: linear-gradient(145deg, #42dc87, #24aee9);
-      color: #06130c; font-weight: 1000;
+      width: 34px; height: 34px; display: grid; place-items: center;
+      border-radius: 8px; background: var(--accent);
+      color: #000; font-weight: 700; font-size: 14px;
     }
-    h1 { margin: 0; font-size: 20px; }
-    .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    h1 { margin: 0; font-size: 17px; font-weight: 500; letter-spacing: -.02em; }
+    .sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
     .header-actions { display: flex; align-items: center; gap: 10px; }
     .connection {
       display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px;
@@ -110,20 +121,19 @@
     .dot { width: 9px; height: 9px; border-radius: 50%; background: #53616d; }
     .dot.live { background: var(--green); box-shadow: 0 0 12px rgba(66,220,135,.7); }
     main {
-      width: min(1600px, 100%);
+      width: min(1500px, 100%);
       margin: 0 auto;
-      padding: 20px;
+      padding: 24px;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 350px;
-      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 20px;
     }
     .camera-column { min-width: 0; }
     .camera-card, .panel {
-      background: rgba(17, 25, 34, .92);
-      border: 1px solid var(--line);
-      border-radius: 16px;
+      background: var(--panel);
+      border: 1px solid var(--line-soft);
+      border-radius: 10px;
       overflow: hidden;
-      box-shadow: 0 16px 45px rgba(0,0,0,.24);
     }
     .camera-toolbar {
       display: flex;
@@ -131,9 +141,16 @@
       justify-content: space-between;
       flex-wrap: wrap;
       gap: 12px;
-      padding: 14px 16px;
-      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
     }
+    .toolbar-left { display: flex; align-items: center; gap: 10px; }
+    .setup-tools {
+      display: flex; gap: 8px; flex-wrap: wrap;
+      padding: 0 14px 14px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .setup-tools[hidden] { display: none; }
+    .setup-tools button { font-size: 12.5px; padding: 8px 11px; }
     .camera-tools { display: flex; gap: 8px; flex-wrap: wrap; }
     .calibration-notice {
       margin-top: 12px;
@@ -196,22 +213,25 @@
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
-      margin-top: 14px;
+      margin-top: 16px;
     }
     .stat {
-      padding: 16px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: rgba(17,25,34,.9);
+      padding: 15px 16px;
+      border: 1px solid var(--line-soft);
+      border-radius: 10px;
+      background: var(--panel);
     }
-    .stat-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-    .stat-value { margin-top: 6px; font-size: 27px; font-weight: 900; }
+    .stat-label { color: var(--muted); font-size: 12px; font-weight: 500; }
+    .stat-value { margin-top: 6px; font-size: 26px; font-weight: 500; letter-spacing: -.02em; }
     .stat.tokens .stat-value { color: var(--amber); }
     .stat.security .stat-value { color: var(--green); font-size: 18px; padding-top: 6px; }
     .stat.security.alert .stat-value { color: var(--red); }
-    aside { display: flex; flex-direction: column; gap: 14px; }
-    .panel { padding: 17px; }
-    .panel h2 { font-size: 15px; margin: 0 0 14px; }
+    aside { display: flex; flex-direction: column; gap: 16px; }
+    .panel { padding: 18px; }
+    .panel h2 {
+      font-size: 14px; margin: 0 0 14px; color: var(--text);
+      font-weight: 500; letter-spacing: -.01em;
+    }
     .stack { display: grid; gap: 9px; }
     .stack button { width: 100%; }
     .hint { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 10px 0 0; }
@@ -220,8 +240,8 @@
     }
     .events { display: grid; gap: 9px; max-height: 300px; overflow: auto; }
     .event {
-      border: 1px solid var(--line); border-left: 3px solid var(--red);
-      border-radius: 9px; padding: 10px; background: #0c131a;
+      border: 1px solid var(--line-soft); border-left: 2px solid var(--red);
+      border-radius: 8px; padding: 10px; background: var(--panel-2);
     }
     .event-top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
     .event-type { color: #ff8e9b; font-weight: 800; }
@@ -253,20 +273,53 @@
       aside { grid-template-columns: 1fr; }
       select { min-width: 150px; width: 100%; }
       .camera-toolbar { align-items: stretch; }
+      .field-grid { grid-template-columns: 1fr; }
     }
+
+    /* Settings modal */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 60; display: none;
+      align-items: flex-start; justify-content: center;
+      background: rgba(4, 8, 12, .72); backdrop-filter: blur(6px);
+      padding: 40px 16px; overflow-y: auto;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal {
+      width: min(560px, 100%); background: var(--panel);
+      border: 1px solid var(--line); border-radius: 16px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, .55);
+    }
+    .modal-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 20px; border-bottom: 1px solid var(--line);
+    }
+    .modal-head h2 { margin: 0; font-size: 18px; }
+    .modal-close {
+      border: none; background: transparent; color: var(--muted);
+      font-size: 24px; line-height: 1; padding: 2px 8px;
+    }
+    .modal-close:hover { color: var(--text); transform: none; border-color: transparent; }
+    .modal-body { padding: 4px 20px 20px; }
+    .settings-group { padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .settings-group:last-child { border-bottom: none; }
+    .settings-group h3 { margin: 0 0 4px; font-size: 14px; }
+    .settings-group .group-hint { color: var(--muted); font-size: 12px; margin: 0; line-height: 1.45; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .settings-status { min-height: 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
   </style>
 </head>
 <body>
   <header>
     <div class="brand">
-      <div class="logo">TS</div>
+      <div class="logo">CT</div>
       <div>
-        <h1>Tailgating Simulation Demo</h1>
+        <h1>CCTV Tailgate</h1>
         <div class="sub" id="cameraName">Main Entrance</div>
       </div>
     </div>
     <div class="header-actions">
       <div class="connection"><span class="dot" id="liveDot"></span><span id="liveText">Camera stopped</span></div>
+      <button class="blue" id="openSettings">⚙ Settings</button>
       <select id="cameraSelect" aria-label="Camera device">
         <option value="">Default camera</option>
       </select>
@@ -279,20 +332,23 @@
     <section class="camera-column">
       <div class="camera-card">
         <div class="camera-toolbar">
-          <div class="camera-tools">
-            <button class="primary" id="drawFocus">Draw focus area</button>
-            <button id="clearFocus">Show full camera</button>
-            <button class="blue" id="drawLine">Draw counting line</button>
-            <button id="toggleDiagnostics">Diagnostics: on</button>
-            <button id="toggleOut">Show OUT arrow</button>
-            <button id="drawZone">Draw door zone</button>
-            <button id="drawGate">Draw gate zone</button>
-            <button id="finishZone" disabled>Finish zone</button>
-            <button id="clearZone">Clear zone</button>
-            <button id="clearGate">Clear gate</button>
-            <button id="saveSetup">Save setup</button>
+          <div class="toolbar-left">
+            <button class="ghost" id="toggleSetupTools" aria-expanded="false" aria-controls="setupTools">⚙ Setup tools</button>
+            <button class="blue" id="saveSetup">Save setup</button>
           </div>
           <div class="fps" id="processingStatus">Waiting for camera</div>
+        </div>
+        <div class="setup-tools" id="setupTools" hidden>
+          <button class="primary" id="drawFocus">Draw focus area</button>
+          <button id="clearFocus">Show full camera</button>
+          <button class="blue" id="drawLine">Draw counting line</button>
+          <button id="toggleDiagnostics">Diagnostics: on</button>
+          <button id="toggleOut">Show OUT arrow</button>
+          <button id="drawZone">Draw door zone</button>
+          <button id="drawGate">Draw gate zone</button>
+          <button id="finishZone" disabled>Finish zone</button>
+          <button id="clearZone">Clear zone</button>
+          <button id="clearGate">Clear gate</button>
         </div>
         <div class="stage" id="stage">
           <video id="video" autoplay playsinline muted></video>
@@ -404,6 +460,75 @@
     </aside>
   </main>
 
+  <div class="modal-overlay" id="settingsOverlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head">
+        <h2 id="settingsTitle">Settings</h2>
+        <button class="modal-close" id="closeSettings" aria-label="Close settings">×</button>
+      </div>
+      <div class="modal-body">
+
+        <div class="settings-group">
+          <h3>Detection &amp; tailgating</h3>
+          <p class="group-hint">Choose how a tailgating event is decided and tune the thresholds. Saved to the server and applied immediately.</p>
+          <label class="check-row"><input type="checkbox" id="tgEnabled"> Enable tailgating detection</label>
+          <div class="field">
+            <label for="tgMode">Detection mode</label>
+            <select id="tgMode" style="width:100%; max-width:none;">
+              <option value="entry_burst">Entry burst — a group entering together</option>
+              <option value="access_token">Access token — external authorization required</option>
+            </select>
+          </div>
+          <div class="field-grid">
+            <div class="field" id="tgMinPeopleField">
+              <label for="tgMinPeople">Minimum people (2–10)</label>
+              <input id="tgMinPeople" type="number" min="2" max="10" step="1">
+            </div>
+            <div class="field">
+              <label for="tgWindow">Time window, seconds (1–60)</label>
+              <input id="tgWindow" type="number" min="1" max="60" step="1">
+            </div>
+          </div>
+          <div class="field-grid" id="tgTokenFields">
+            <div class="field">
+              <label for="tgTokenValid">Token valid, seconds (1–120)</label>
+              <input id="tgTokenValid" type="number" min="1" max="120" step="1">
+            </div>
+            <div class="field">
+              <label for="tgMaxPerToken">People per token (1–10)</label>
+              <input id="tgMaxPerToken" type="number" min="1" max="10" step="1">
+            </div>
+          </div>
+          <div class="stack" style="margin-top:12px;">
+            <button class="primary" id="saveTailgating">Save detection settings</button>
+          </div>
+          <div class="settings-status" id="tailgatingMessage"></div>
+        </div>
+
+        <div class="settings-group">
+          <h3>Telegram alerts <span class="dot" id="telegramDot" style="display:inline-block; margin-left:4px;"></span></h3>
+          <p class="group-hint">Send tailgating snapshots and clips to a Telegram chat. Status: <span id="telegramStatus">Not configured</span>.</p>
+          <label class="check-row"><input type="checkbox" id="telegramEnabled"> Enable Telegram notifications</label>
+          <div class="field">
+            <label for="telegramToken">Bot token</label>
+            <input id="telegramToken" autocomplete="off" placeholder="123456:ABC...">
+          </div>
+          <div class="field">
+            <label for="telegramChatId">Chat ID</label>
+            <input id="telegramChatId" autocomplete="off" placeholder="-1001234567890">
+          </div>
+          <div class="telegram-actions">
+            <button id="telegramDiscover">Find chat (after /start)</button>
+            <button id="telegramTest">Send test</button>
+            <button class="primary" id="telegramSave">Save Telegram settings</button>
+          </div>
+          <div class="settings-status" id="telegramMessage"></div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
   <canvas id="capture"></canvas>
 
   <script>
@@ -505,6 +630,76 @@
           : "123456:ABC...";
       }
       if (telegram.last_error) setTelegramMessage(telegram.last_error, true);
+    }
+
+    function setTailgatingMessage(text, error = false) {
+      const node = document.getElementById("tailgatingMessage");
+      if (!node) return;
+      node.textContent = text;
+      node.style.color = error ? "var(--red)" : "var(--green)";
+    }
+
+    function updateTailgatingModeFields() {
+      const mode = document.getElementById("tgMode").value;
+      document.getElementById("tgMinPeopleField").style.display =
+        mode === "entry_burst" ? "" : "none";
+      document.getElementById("tgTokenFields").style.display =
+        mode === "access_token" ? "grid" : "none";
+    }
+
+    function fillSettingsForm(status) {
+      const t = status.tailgating_settings || {};
+      document.getElementById("tgEnabled").checked = t.enabled !== false;
+      document.getElementById("tgMode").value = t.detection_mode || "entry_burst";
+      document.getElementById("tgMinPeople").value = t.minimum_people ?? 2;
+      document.getElementById("tgWindow").value = t.tailgating_time_window_seconds ?? 4;
+      document.getElementById("tgTokenValid").value = t.token_valid_seconds ?? 6;
+      document.getElementById("tgMaxPerToken").value = t.max_people_per_token ?? 1;
+      updateTailgatingModeFields();
+      updateTelegramStatus(status.telegram || {});
+    }
+
+    async function openSettings() {
+      setTailgatingMessage("");
+      setTelegramMessage("");
+      try {
+        fillSettingsForm(await api("/status"));
+      } catch (error) {
+        setTailgatingMessage(`Could not load settings: ${error.message}`, true);
+      }
+      document.getElementById("settingsOverlay").classList.add("show");
+    }
+
+    function closeSettings() {
+      document.getElementById("settingsOverlay").classList.remove("show");
+    }
+
+    async function saveTailgatingSettings() {
+      const payload = {
+        enabled: document.getElementById("tgEnabled").checked,
+        detection_mode: document.getElementById("tgMode").value,
+        minimum_people: Number(document.getElementById("tgMinPeople").value) || 2,
+        tailgating_time_window_seconds:
+          Number(document.getElementById("tgWindow").value) || 4,
+        token_valid_seconds:
+          Number(document.getElementById("tgTokenValid").value) || 6,
+        max_people_per_token:
+          Number(document.getElementById("tgMaxPerToken").value) || 1
+      };
+      const button = document.getElementById("saveTailgating");
+      button.disabled = true;
+      try {
+        updateStatus(await api("/control/tailgating", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload)
+        }));
+        setTailgatingMessage("Detection settings saved.");
+      } catch (error) {
+        setTailgatingMessage(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
     }
 
     function markSetupChanged(message) {
@@ -1625,6 +1820,23 @@
         }
       });
     }
+    document.getElementById("toggleSetupTools").addEventListener("click", (event) => {
+      const tools = document.getElementById("setupTools");
+      const open = tools.hasAttribute("hidden");
+      tools.toggleAttribute("hidden", !open);
+      event.currentTarget.setAttribute("aria-expanded", String(open));
+    });
+    document.getElementById("openSettings").addEventListener("click", openSettings);
+    document.getElementById("closeSettings").addEventListener("click", closeSettings);
+    document.getElementById("settingsOverlay").addEventListener("click", (event) => {
+      if (event.target.id === "settingsOverlay") closeSettings();
+    });
+    document.getElementById("tgMode").addEventListener("change", updateTailgatingModeFields);
+    document.getElementById("saveTailgating").addEventListener("click", saveTailgatingSettings);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeSettings();
+    });
+
     runAiAtTargetRate();
     setInterval(refreshStatus, 1000);
     setInterval(() => {

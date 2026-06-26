@@ -1,6 +1,6 @@
-# Gym Sentry
+# CCTV Tailgate
 
-Gym Sentry is a local, one-camera people counter and tailgating detector for
+CCTV Tailgate is a local, one-camera people counter and tailgating detector for
 gyms, offices, and controlled entrances.
 
 It detects and tracks people crossing a configurable line, records suspicious
@@ -47,6 +47,53 @@ Open:
 Ultralytics downloads the configured YOLO model on first launch if it is not
 already present.
 
+## Run with Docker
+
+A `Dockerfile`, `docker-compose.yml`, and `.dockerignore` are included. The
+container runs `python -m src.main` and exposes the app on port `8080`.
+
+Before the first run, create your local configuration and secrets:
+
+```bash
+cp config.example.yaml config.yaml
+cp .env.example .env
+```
+
+Then build and start the service:
+
+```bash
+docker compose up --build
+```
+
+The dashboard is then available at <http://127.0.0.1:8080/>.
+
+The Compose file binds the port to `127.0.0.1:8080:8080` so the service is
+reachable only from the host by default. It also mounts the following paths
+from the project directory into the container so your configuration and data
+persist across rebuilds:
+
+| Mounted path | Purpose |
+|---|---|
+| `config.yaml` | Runtime configuration |
+| `.env` | Environment variables (for example, `TZ`) |
+| `captures/` | Saved snapshots, crops, and clips |
+| `logs/` | CSV activity logs |
+| `data/` | SQLite event history |
+| `secrets/` | Telegram credentials |
+
+> **Browser webcams are not available inside the container.** For Docker
+> deployments use `source_mode: direct_rtsp` (see [Camera sources](#camera-sources))
+> or have a plugin submit frames to `POST /process-frame`.
+
+### Docker security
+
+- Do not expose port `8080` directly to the public internet.
+- For remote access, use a VPN or an authenticated reverse proxy that
+  terminates TLS in front of the container.
+- Keep RTSP credentials (`config.yaml`) and Telegram secrets (`secrets/`) out of
+  version control; both paths are already covered by `.gitignore` and
+  `.dockerignore`.
+
 ## First-time setup
 
 1. Open the dashboard and allow camera access.
@@ -63,6 +110,63 @@ The browser and `config.yaml` remember the selected USB camera.
 
 For physical installation and acceptance testing, follow
 [FIELD_TEST.md](FIELD_TEST.md).
+
+## Calibration guide
+
+Good counting accuracy depends far more on camera placement and line geometry
+than on software settings. Calibrate once during installation and re-verify
+whenever the camera is moved.
+
+### Camera placement
+
+- **Height:** mount the camera approximately **2.7–3.2 m** above the floor.
+- **Angle:** tilt it **30–45 degrees** downward so people are seen from above
+  rather than head-on. This separates individuals who walk close together and
+  keeps the counting point (the bottom-center of each person) stable.
+- Aim for a clean, evenly lit view of the doorway with minimal backlight.
+
+### Draw the focus area
+
+1. Start the camera and click **Setup tools → Draw focus area**.
+2. Outline only the doorway and its immediate approach — either a two-corner
+   rectangle or a polygon for irregular openings.
+3. A tight focus area improves accuracy, masks bystanders outside the doorway,
+   and limits saved evidence to the entrance region.
+
+### Place the counting line
+
+1. Click **Draw counting line** and draw it across the entrance, roughly
+   perpendicular to the direction people walk.
+2. Keep the line within the focus area and away from the frame edges, where
+   tracking is least reliable.
+3. A person is counted when the bottom-center of their box crosses the line.
+
+### Verify the IN direction
+
+1. Confirm the green **IN** arrow points toward the inside of the space.
+2. If it is reversed, redraw the line in the opposite direction (or enable
+   **Show OUT arrow** to confirm both directions), then click **Save setup**.
+
+### Acceptance tests
+
+Walk the entrance and confirm each result before going live:
+
+| Test | Expected result |
+|---|---|
+| One person enters | `IN` increases by 1 |
+| One person exits | `OUT` increases by 1 (if OUT counting is enabled) |
+| Two people enter close together | Both counted; a tailgating event is recorded |
+| Same person crosses back and forth | Repeated crossings do **not** form a group |
+
+### Common mistakes
+
+- **Counting line too close to a frame edge**, where people appear and
+  disappear abruptly.
+- **Poor or uneven lighting**, including strong backlight from the doorway.
+- **Focus area drawn too wide**, which counts passers-by and adds noise.
+- **Wrong IN direction**, which swaps entries and exits.
+- **Crowd occlusion** from people overlapping under a shallow camera angle —
+  raise the camera or steepen the downward tilt.
 
 ## Tailgating detection modes
 
@@ -88,7 +192,7 @@ This mode does not use external authorization tokens.
 
 ### Access-token mode
 
-Use this mode when Gym Sentry is connected to a membership, card, QR,
+Use this mode when CCTV Tailgate is connected to a membership, card, QR,
 fingerprint, face-access, or other authorization system:
 
 ```yaml
@@ -123,11 +227,11 @@ camera:
 ```
 
 Use **Refresh cameras** after connecting a new USB camera. If the saved camera
-is unavailable, Gym Sentry pauses instead of silently selecting another one.
+is unavailable, CCTV Tailgate pauses instead of silently selecting another one.
 
 ### Direct IP or RTSP camera
 
-Gym Sentry can read a network camera directly on the server:
+CCTV Tailgate can read a network camera directly on the server:
 
 ```yaml
 camera:
@@ -138,7 +242,7 @@ camera:
 ```
 
 For Hikvision cameras, channel `101` is commonly the main stream and `102` the
-lighter sub-stream. Verify the URL in VLC before configuring Gym Sentry.
+lighter sub-stream. Verify the URL in VLC before configuring CCTV Tailgate.
 
 The server reconnects automatically after a stream interruption. Keep camera
 credentials private because `config.yaml` contains the complete URL.
@@ -175,7 +279,7 @@ points. When enabled:
 - event snapshots and clips contain only the processed region;
 - counting pauses if a required focus area is not configured.
 
-Gym Sentry uses face **detection only** for optional close-up evidence. It does
+CCTV Tailgate uses face **detection only** for optional close-up evidence. It does
 not identify, enroll, compare, or recognize faces.
 
 To disable ordinary entry face captures:
@@ -214,7 +318,7 @@ tailgating:
   clip_fps: 10
 ```
 
-Face candidates are sampled while a person is tracked. Gym Sentry saves the
+Face candidates are sampled while a person is tracked. CCTV Tailgate saves the
 best available crop based on sharpness and size rather than relying only on the
 crossing frame. A candidate must have plausible face geometry, appear in the
 upper body, meet the sharpness threshold, and contain at least one detected eye.
@@ -231,6 +335,42 @@ Runtime logs:
 | `logs/gate_events.csv` | Gate movement start and end records |
 
 Photos and video frames include a local date/time overlay.
+
+## Event Review
+
+Detected tailgating events can be reviewed after the fact from the evidence
+saved locally on the server. Every confirmed event is persisted to the SQLite
+history (`data/`) alongside its snapshot, body crop, optional face crop, and
+short clip, so a reviewer can confirm what happened without watching the live
+feed.
+
+### Review workflow
+
+1. **Filter events** by date and type. The history is queryable through
+   `GET /events` using `category` (`security`, `crossing`, or `gate`), `limit`,
+   and `offset`, returning newest-first records.
+2. **Inspect the evidence** for each event: the snapshot, the body crop, the
+   optional face crop, and the recorded clip. Evidence URLs are included with
+   each event where available.
+3. **Triage the event** by recording a disposition — **reviewed**, **ignored**,
+   or **escalated** — and **notes** that capture context for an audit trail.
+4. **Export selected evidence** — the underlying snapshot, crop, and clip files
+   live under `captures/` and can be copied or archived for incident reports.
+
+> Filtering and viewing evidence are built in: every event is available through
+> `GET /events`, and its media is served from `captures/`. Disposition states
+> and notes are not stored by CCTV Tailgate itself; record them in your own
+> review process or a case-management system that consumes the
+> [plugin API](PLUGIN_INTEGRATION.md). Export is performed by copying the
+> relevant files from `captures/`.
+
+### Where the evidence stays
+
+All snapshots, crops, clips, logs, and the event database remain **local to the
+machine running CCTV Tailgate**. Nothing leaves the host unless you explicitly
+configure an outbound channel — Telegram alerts (see below) or an external
+integration via the [plugin API](PLUGIN_INTEGRATION.md). Treat exported
+evidence and any `person_ref` values as sensitive operational data.
 
 ## Telegram alerts
 
@@ -260,7 +400,7 @@ curl -X POST http://127.0.0.1:8080/telegram/test
 
 ## Gate movement detection
 
-Draw a tight polygon around a gate, turnstile arm, or door leaf. Gym Sentry uses
+Draw a tight polygon around a gate, turnstile arm, or door leaf. CCTV Tailgate uses
 OpenCV frame differencing and reports `STILL`, `MOVING`, or `OFF`.
 
 ```yaml
@@ -356,7 +496,7 @@ setup validation.
 
 - Confirm the URL plays in VLC.
 - Prefer the camera sub-stream for lower CPU usage.
-- Confirm the camera and Gym Sentry are on reachable networks.
+- Confirm the camera and CCTV Tailgate are on reachable networks.
 - Try `rtsp_transport: tcp`.
 - Check that the username, password, IP address, and channel are correct.
 
@@ -374,5 +514,5 @@ setup validation.
 - Camera angle, lighting, focus area, and counting-line placement matter.
 - A useful starting position is approximately 2.7-3.2 m high and angled
   30-45 degrees downward.
-- Gym Sentry is a local monitoring tool, not an identity or biometric access
+- CCTV Tailgate is a local monitoring tool, not an identity or biometric access
   system.

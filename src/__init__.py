@@ -1,1 +1,1 @@
-"""Gym Sentry anonymous people counting and tailgating detection."""
+"""CCTV Tailgate anonymous people counting and tailgating detection."""

@@ -1,12 +1,12 @@
-# Gym Sentry Plugin Integration Guide
+# CCTV Tailgate Plugin Integration Guide
 
-This guide explains how to connect Gym Sentry to an existing access-control,
+This guide explains how to connect CCTV Tailgate to an existing access-control,
 membership, kiosk, camera, or building-management system.
 
-Gym Sentry runs as a local HTTP service. Your system can integrate it through a
+CCTV Tailgate runs as a local HTTP service. Your system can integrate it through a
 small plugin or adapter that:
 
-1. checks that Gym Sentry is healthy;
+1. checks that CCTV Tailgate is healthy;
 2. sends successful access authorizations;
 3. optionally sends camera frames;
 4. reads counts, security state, and recent events.
@@ -14,7 +14,7 @@ small plugin or adapter that:
 No Python import is required. Any language that can make HTTP requests can be
 used.
 
-## Start Gym Sentry
+## Start CCTV Tailgate
 
 ```bash
 source .venv/bin/activate
@@ -44,10 +44,10 @@ Member scans card, QR code, fingerprint, or face
 Your system confirms access is allowed
                     |
                     v
-POST /access-event to Gym Sentry
+POST /access-event to CCTV Tailgate
                     |
                     v
-Gym Sentry creates one short-lived authorization token
+CCTV Tailgate creates one short-lived authorization token
                     |
                     v
 The next matching IN crossing consumes that token
@@ -62,7 +62,7 @@ The default `entry_burst` mode detects two or more distinct people entering
 inside a rolling time window. It does not use authorization tokens.
 
 To connect an external access system, change the mode in `config.yaml` and
-restart Gym Sentry:
+restart CCTV Tailgate:
 
 ```yaml
 tailgating:
@@ -74,7 +74,7 @@ tailgating:
 - `token_valid_seconds` controls how long an authorization remains valid.
 - `max_people_per_token` controls how many IN crossings one authorization
   permits.
-- Tokens are kept in memory and are cleared when Gym Sentry restarts.
+- Tokens are kept in memory and are cleared when CCTV Tailgate restarts.
 
 ## Core API
 
@@ -95,7 +95,7 @@ Response:
 ```json
 {
   "ok": true,
-  "service": "gym-sentry-web"
+  "service": "cctv-tailgate"
 }
 ```
 
@@ -126,10 +126,10 @@ Fields:
 
 | Field | Required | Description |
 |---|---:|---|
-| `camera_name` | Yes | Must match the configured Gym Sentry camera name. |
+| `camera_name` | Yes | Must match the configured CCTV Tailgate camera name. |
 | `event_type` | Yes | Currently must be `face_id_authorized`. The name is retained for compatibility even when the source is a card, QR code, fingerprint, or other access system. |
 | `person_ref` | No | Your internal member or transaction reference. Avoid sending unnecessary personal data. |
-| `timestamp` | No | ISO 8601 authorization time. Omit it to use the Gym Sentry server time. |
+| `timestamp` | No | ISO 8601 authorization time. Omit it to use the CCTV Tailgate server time. |
 
 Example:
 
@@ -159,7 +159,7 @@ Important behavior:
 - Do not send a request when access is denied.
 - Do not retry a successful request unless your plugin uses its own unique
   event deduplication; otherwise one scan may create multiple tokens.
-- A `200` response means Gym Sentry accepted the authorization.
+- A `200` response means CCTV Tailgate accepted the authorization.
 - A `400` response means the payload or event type was rejected.
 
 ### Read status and events
@@ -198,7 +198,7 @@ Common response fields:
 windows for the live dashboard. For durable history that survives restarts and
 counter resets, use `GET /events` instead.
 
-Gym Sentry currently exposes status through polling rather than outbound
+CCTV Tailgate currently exposes status through polling rather than outbound
 webhooks. A normal polling interval is one to five seconds.
 
 ### Read persistent event history
@@ -253,7 +253,7 @@ Response:
 }
 ```
 
-Items are returned newest first. Evidence URLs are relative to the Gym Sentry
+Items are returned newest first. Evidence URLs are relative to the CCTV Tailgate
 base URL and are empty when no media was saved. External `person_ref` values
 are never stored in this database. A security event's `clip_url` is filled in
 asynchronously once the video clip finishes encoding, so a follow-up read may
@@ -261,7 +261,7 @@ show a clip that was empty in an earlier response.
 
 ### Send a camera frame
 
-Use this endpoint when your plugin owns the camera and wants Gym Sentry to
+Use this endpoint when your plugin owns the camera and wants CCTV Tailgate to
 process individual frames.
 
 ```http
@@ -307,7 +307,7 @@ from datetime import datetime, timezone
 import requests
 
 
-class GymSentryPlugin:
+class CCTVTailgatePlugin:
     def __init__(self, base_url="http://127.0.0.1:8080"):
         self.base_url = base_url.rstrip("/")
 
@@ -339,10 +339,10 @@ class GymSentryPlugin:
 Usage:
 
 ```python
-gym_sentry = GymSentryPlugin()
+sentry = CCTVTailgatePlugin()
 
-if gym_sentry.health()["ok"]:
-    result = gym_sentry.authorize(
+if sentry.health()["ok"]:
+    result = sentry.authorize(
         camera_name="Main Entrance",
         person_ref="member-12345",
     )
@@ -370,7 +370,7 @@ export async function authorizeGymEntry({
 
   const body = await response.json();
   if (!response.ok) {
-    throw new Error(body.detail || `Gym Sentry returned ${response.status}`);
+    throw new Error(body.detail || `CCTV Tailgate returned ${response.status}`);
   }
   return body;
 }
@@ -437,7 +437,7 @@ computer.
 Recommended deployment:
 
 - Keep `api.host: 127.0.0.1` when the plugin runs on the same computer.
-- If another machine must connect, place Gym Sentry behind an authenticated
+- If another machine must connect, place CCTV Tailgate behind an authenticated
   reverse proxy or private VPN.
 - Do not expose port `8080` directly to the public internet.
 - Restrict access to `/control/*` and `/telegram/*` more strongly than
@@ -446,14 +446,14 @@ Recommended deployment:
 - Treat evidence URLs and `person_ref` values as sensitive operational data.
 
 Browser-based plugins on another origin also need a same-origin backend proxy;
-Gym Sentry does not currently enable cross-origin browser requests.
+CCTV Tailgate does not currently enable cross-origin browser requests.
 
 ## Reliability recommendations
 
 - Use connection and response timeouts of about three seconds.
 - Retry connection failures and `5xx` responses with exponential backoff.
 - Do not automatically retry a `200` authorization response.
-- Queue access events briefly if Gym Sentry is temporarily unavailable.
+- Queue access events briefly if CCTV Tailgate is temporarily unavailable.
 - Preserve your own access-event ID so your plugin can prevent duplicate sends.
 - Monitor `/health` and the `last_frame_at` field from `/status`.
 - Log response status codes, but never log camera credentials or Telegram

@@ -1,4 +1,4 @@
-# Gym Sentry doorway field test
+# CCTV Tailgate doorway field test
 
 Use this checklist after mounting the real entrance camera. Do not accept the
 setup until the first row passes.
@@ -7,7 +7,7 @@ setup until the first row passes.
 
 1. Open <http://127.0.0.1:8080/>.
 2. Select the intended entrance camera. If it is missing, reconnect it and use
-   **Refresh cameras**. Gym Sentry will not silently fall back to another
+   **Refresh cameras**. CCTV Tailgate will not silently fall back to another
    camera.
 3. Draw the doorway focus area so only the usable entrance is visible.
 4. Draw the counting line across the walking path.

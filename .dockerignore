@@ -1,0 +1,27 @@
+# Version control and tooling
+.git
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+
+# Python virtual environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets and local configuration (provided at runtime via volume mounts)
+.env
+.env.*
+config.yaml
+secrets/
+
+# Runtime output (provided at runtime via volume mounts)
+captures/
+logs/
+data/
+
+# Tests and documentation are not needed in the runtime image
+tests/
+*.md
