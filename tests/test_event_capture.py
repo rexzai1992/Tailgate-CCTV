@@ -11,6 +11,15 @@ from src.event_capture import EventCapture
 
 
 class EventCaptureTests(unittest.TestCase):
+    @staticmethod
+    def _textured_person_frame() -> np.ndarray:
+        frame = np.zeros((300, 300, 3), dtype=np.uint8)
+        rng = np.random.default_rng(7)
+        frame[40:240, 80:220] = rng.integers(
+            30, 230, size=(200, 140, 3), dtype=np.uint8
+        )
+        return frame
+
     def test_clip_finalizes_when_tracker_leaves_frame(self) -> None:
         with TemporaryDirectory() as directory:
             capture = EventCapture(
@@ -76,15 +85,19 @@ class EventCaptureTests(unittest.TestCase):
 
     def test_tailgating_face_crop_is_saved_when_face_is_detected(self) -> None:
         with TemporaryDirectory() as directory:
-            frame = np.zeros((300, 300, 3), dtype=np.uint8)
-            frame[40:240, 80:220] = (80, 140, 220)
+            frame = self._textured_person_frame()
             capture = EventCapture(
                 directory,
                 capture_face_closeup=True,
                 face_padding_percent=0.2,
             )
-            with patch.object(
-                capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+            with (
+                patch.object(
+                    capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+                ),
+                patch.object(
+                    capture, "_detect_eyes", return_value=[(10, 12, 18, 16)]
+                ),
             ):
                 path = capture.capture_face_closeup(
                     frame,
@@ -102,15 +115,19 @@ class EventCaptureTests(unittest.TestCase):
     def test_entry_face_crop_is_saved_when_face_is_detected(self) -> None:
         with TemporaryDirectory() as directory:
             entry_dir = Path(directory) / "entries"
-            frame = np.zeros((300, 300, 3), dtype=np.uint8)
-            frame[40:240, 80:220] = (80, 140, 220)
+            frame = self._textured_person_frame()
             capture = EventCapture(
                 directory,
                 capture_entry_face=True,
                 entry_dir=entry_dir,
             )
-            with patch.object(
-                capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+            with (
+                patch.object(
+                    capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+                ),
+                patch.object(
+                    capture, "_detect_eyes", return_value=[(10, 12, 18, 16)]
+                ),
             ):
                 path = capture.capture_entry_face(
                     frame,
@@ -159,6 +176,71 @@ class EventCaptureTests(unittest.TestCase):
 
             self.assertEqual(path, "")
             self.assertEqual(list((Path(directory) / "faces").glob("*.jpg")), [])
+
+    def test_face_shape_without_detected_eye_is_rejected(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = self._textured_person_frame()
+            capture = EventCapture(directory, capture_face_closeup=True)
+            with (
+                patch.object(
+                    capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+                ),
+                patch.object(capture, "_detect_eyes", return_value=[]),
+            ):
+                path = capture.capture_face_closeup(
+                    frame,
+                    camera_name="Main Entrance",
+                    tracker_id=1,
+                    bbox=(80, 40, 220, 240),
+                )
+
+            self.assertEqual(path, "")
+
+    def test_blurry_face_candidate_is_rejected(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = np.full((300, 300, 3), 120, dtype=np.uint8)
+            capture = EventCapture(
+                directory,
+                capture_face_closeup=True,
+                min_face_sharpness=35,
+            )
+            with (
+                patch.object(
+                    capture, "_detect_faces", return_value=[(30, 20, 60, 70)]
+                ),
+                patch.object(
+                    capture, "_detect_eyes", return_value=[(10, 12, 18, 16)]
+                ),
+            ):
+                path = capture.capture_face_closeup(
+                    frame,
+                    camera_name="Main Entrance",
+                    tracker_id=1,
+                    bbox=(80, 40, 220, 240),
+                )
+
+            self.assertEqual(path, "")
+
+    def test_implausibly_wide_face_candidate_is_rejected(self) -> None:
+        with TemporaryDirectory() as directory:
+            frame = self._textured_person_frame()
+            capture = EventCapture(directory, capture_face_closeup=True)
+            with (
+                patch.object(
+                    capture, "_detect_faces", return_value=[(10, 20, 120, 40)]
+                ),
+                patch.object(
+                    capture, "_detect_eyes", return_value=[(10, 12, 18, 16)]
+                ),
+            ):
+                path = capture.capture_face_closeup(
+                    frame,
+                    camera_name="Main Entrance",
+                    tracker_id=1,
+                    bbox=(80, 40, 220, 240),
+                )
+
+            self.assertEqual(path, "")
 
 
 if __name__ == "__main__":

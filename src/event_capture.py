@@ -36,6 +36,8 @@ class EventCapture:
         capture_face_closeup: bool = False,
         face_padding_percent: float = 0.3,
         min_face_pixels: int = 36,
+        require_eye_confirmation: bool = True,
+        min_face_sharpness: float = 35,
         save_event_clip: bool = False,
         clip_fps: float = 10,
         pre_seconds: float = 5,
@@ -52,6 +54,8 @@ class EventCapture:
         self.capture_face_closeup_enabled = capture_face_closeup
         self.face_padding_percent = max(0.0, float(face_padding_percent))
         self.min_face_pixels = max(20, int(min_face_pixels))
+        self.require_eye_confirmation = bool(require_eye_confirmation)
+        self.min_face_sharpness = max(0.0, float(min_face_sharpness))
         self.save_event_clip = save_event_clip
         self.clip_fps = max(1.0, float(clip_fps))
         self.pre_seconds = float(pre_seconds)
@@ -71,6 +75,7 @@ class EventCapture:
         self._profile_face = self._load_cascade(
             "haarcascade_profileface.xml"
         )
+        self._eye = self._load_cascade("haarcascade_eye.xml")
         self._buffer: deque[tuple[float, bytes]] = deque()
         self._pending: list[PendingClip] = []
         self._last_buffered_at = 0.0
@@ -347,11 +352,23 @@ class EventCapture:
         # patterned clothing lower down for a face.
         head_height = max(1, int(person_crop.shape[0] * 0.55))
         head_region = person_crop[0:head_height, :]
-        faces = self._detect_faces(head_region)
-        if not faces:
+        candidates = [
+            candidate
+            for face in self._detect_faces(head_region)
+            if (
+                candidate := self._validated_face_candidate(
+                    head_region,
+                    face,
+                    person_crop.shape[1],
+                    person_crop.shape[0],
+                )
+            )
+            is not None
+        ]
+        if not candidates:
             return None
-        face_x, face_y, face_w, face_h = max(
-            faces, key=lambda item: item[2] * item[3]
+        face_x, face_y, face_w, face_h, _ = max(
+            candidates, key=lambda item: item[4]
         )
         pad_x = round(face_w * self.face_padding_percent)
         pad_y = round(face_h * self.face_padding_percent)
@@ -382,6 +399,48 @@ class EventCapture:
         sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
         area = float(crop.shape[0] * crop.shape[1])
         return sharpness * (area ** 0.5)
+
+    def _validated_face_candidate(
+        self,
+        head_region: np.ndarray,
+        face: tuple[int, int, int, int],
+        person_width: int,
+        person_height: int,
+    ) -> tuple[int, int, int, int, float] | None:
+        x, y, width, height = (int(value) for value in face)
+        region_height, region_width = head_region.shape[:2]
+        if width < self.min_face_pixels or height < self.min_face_pixels:
+            return None
+        if x < 0 or y < 0 or x + width > region_width or y + height > region_height:
+            return None
+
+        aspect = width / max(1.0, float(height))
+        if not 0.68 <= aspect <= 1.45:
+            return None
+        relative_width = width / max(1.0, float(person_width))
+        relative_height = height / max(1.0, float(person_height))
+        if not 0.14 <= relative_width <= 0.9:
+            return None
+        if not 0.1 <= relative_height <= 0.52:
+            return None
+        center_y = (y + height / 2) / max(1.0, float(person_height))
+        if center_y > 0.42:
+            return None
+
+        face_region = head_region[y : y + height, x : x + width]
+        if face_region.size == 0:
+            return None
+        gray = cv2.cvtColor(face_region, cv2.COLOR_BGR2GRAY)
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        if sharpness < self.min_face_sharpness:
+            return None
+
+        eyes = self._detect_eyes(face_region)
+        if self.require_eye_confirmation and not eyes:
+            return None
+        eye_bonus = min(2, len(eyes)) * 1_000_000
+        score = eye_bonus + width * height + sharpness
+        return x, y, width, height, score
 
     def _write_face_image(
         self, crop: np.ndarray, path: Path, when: datetime | None
@@ -478,6 +537,32 @@ class EventCapture:
                 x, y, w, h = (int(value) for value in face)
                 faces.append((gray.shape[1] - x - w, y, w, h))
         return faces
+
+    def _detect_eyes(
+        self, face_crop: np.ndarray
+    ) -> list[tuple[int, int, int, int]]:
+        if self._eye is None or face_crop.size == 0:
+            return []
+        gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.equalizeHist(gray)
+        search_height = max(1, round(gray.shape[0] * 0.72))
+        upper_face = gray[:search_height, :]
+        minimum = max(8, round(min(gray.shape[:2]) * 0.12))
+        detected = self._eye.detectMultiScale(
+            upper_face,
+            scaleFactor=1.08,
+            minNeighbors=5,
+            minSize=(minimum, minimum),
+        )
+        valid: list[tuple[int, int, int, int]] = []
+        for eye in detected:
+            x, y, width, height = (int(value) for value in eye)
+            aspect = width / max(1.0, float(height))
+            relative_width = width / max(1.0, float(gray.shape[1]))
+            center_y = (y + height / 2) / max(1.0, float(gray.shape[0]))
+            if 0.65 <= aspect <= 1.8 and 0.08 <= relative_width <= 0.55 and center_y <= 0.68:
+                valid.append((x, y, width, height))
+        return valid
 
     @staticmethod
     def _stamp_timestamp(image: np.ndarray, when: datetime) -> np.ndarray:

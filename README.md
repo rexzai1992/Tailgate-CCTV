@@ -15,6 +15,7 @@ group entries, saves local evidence, and can send Telegram alerts. It does
 - Group-entry and access-token tailgating modes
 - Tailgating snapshots, body crops, optional face crops, and short clips
 - Gate or turnstile movement detection
+- On-demand live search for standard objects and basic shirt colors
 - Telegram photo, video, and test notifications
 - CSV logs and a live local dashboard
 - Local HTTP API for access-control and camera-system plugins
@@ -152,6 +153,8 @@ credentials private because `config.yaml` contains the complete URL.
 - **Draw counting line** creates the directional crossing line.
 - **Show OUT arrow** enables or disables OUT counting.
 - **Diagnostics** shows tracker and crossing-state details.
+- **Find in camera** searches for objects such as phones, bags, bottles, and
+  laptops, people holding visible objects, or basic shirt colors.
 - **Draw door zone** creates an optional restricted-entry polygon.
 - **Draw gate zone** outlines a moving gate, door, or turnstile component.
 - **Reset counts** clears IN/OUT totals and recent runtime state.
@@ -203,6 +206,8 @@ tailgating:
   capture_snapshot: true
   capture_body_closeup: true
   capture_face_closeup: true
+  require_eye_confirmation: true
+  min_face_sharpness: 35
   save_event_clip: true
   clip_pre_seconds: 3
   clip_post_seconds: 0
@@ -211,8 +216,11 @@ tailgating:
 
 Face candidates are sampled while a person is tracked. Gym Sentry saves the
 best available crop based on sharpness and size rather than relying only on the
-crossing frame. If no usable face is visible, the normal event snapshot and
-body evidence remain available.
+crossing frame. A candidate must have plausible face geometry, appear in the
+upper body, meet the sharpness threshold, and contain at least one detected eye.
+This intentionally rejects uncertain crops instead of saving hair, clothing, or
+background detail as a face. If no usable face is visible, the normal event
+snapshot and body evidence remain available.
 
 Runtime logs:
 
@@ -273,10 +281,20 @@ The main integration endpoints are:
 | Method | Endpoint | Purpose |
 |---|---|---|
 | `GET` | `/health` | Service health check |
-| `GET` | `/status` | Counts, camera state, security state, and recent events |
+| `GET` | `/status` | Counts, camera state, security state, active tailgating settings, persisted event totals, and recent events |
+| `GET` | `/events` | Persistent event history (`category`, `limit`, `offset`) |
 | `POST` | `/access-event` | Add an approved external authorization |
 | `POST` | `/process-frame` | Process raw JPEG bytes from an external camera plugin |
+| `POST` | `/control/tailgating` | Configure and persist tailgating mode and thresholds |
+| `POST` | `/control/search` | Start or clear an on-demand live object search |
 | `GET` | `/video-feed` | MJPEG output when direct RTSP mode is active |
+
+Crossing, security, and gate events are persisted to a local SQLite database
+(`data/gym_sentry.db`, configurable via `logging.event_db`) and remain
+available through `/events` after restarts and counter resets. The existing CSV
+logs are kept for backward compatibility. See
+[PLUGIN_INTEGRATION.md](PLUGIN_INTEGRATION.md) for the full request and response
+contract.
 
 The API has no built-in authentication. It listens on `127.0.0.1` by default.
 Do not expose port `8080` directly to the public internet. Use an authenticated
@@ -295,7 +313,7 @@ Start from [config.example.yaml](config.example.yaml). Important sections:
 - `door_zone` — optional restricted doorway polygon
 - `gate_zone` — movement detection settings
 - `api` — local host and port
-- `logging` — CSV output paths
+- `logging` — CSV output paths and the SQLite `event_db` path
 
 Performance tuning example:
 

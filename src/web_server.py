@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
+import os
 from pathlib import Path
+import tempfile
 from threading import RLock
 import time
 from typing import Any
@@ -15,6 +17,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import numpy as np
 from pydantic import BaseModel, Field
+import torch
 import yaml
 from ultralytics import YOLO
 
@@ -22,8 +25,16 @@ from .access_tokens import AccessTokenStore
 from .api_server import AccessEvent
 from .counter import LineZoneCounter, point_in_polygon
 from .event_capture import EventCapture
+from .event_store import EventStore
 from .gate_detector import GateMotionDetector
 from .ip_camera import IpCameraStream
+from .search_detector import (
+    SearchSpec,
+    estimate_shirt_color,
+    inactive_search,
+    object_inside_person,
+    parse_search_query,
+)
 from .security_logger import (
     GateEventLogger,
     PeopleCountLogger,
@@ -62,6 +73,10 @@ class CameraSettings(BaseModel):
     target_fps: float = 12
 
 
+class SearchPayload(BaseModel):
+    query: str = ""
+
+
 class TelegramSettingsPayload(BaseModel):
     enabled: bool = True
     chat_id: str = ""
@@ -70,6 +85,15 @@ class TelegramSettingsPayload(BaseModel):
 
 class TelegramDiscoverPayload(BaseModel):
     bot_token: str | None = None
+
+
+class TailgatingSettingsPayload(BaseModel):
+    enabled: bool = True
+    detection_mode: str = "entry_burst"
+    minimum_people: int = Field(default=2, ge=2, le=10)
+    tailgating_time_window_seconds: float = Field(default=4, gt=0, le=60)
+    token_valid_seconds: float = Field(default=6, gt=0, le=120)
+    max_people_per_token: int = Field(default=1, ge=1, le=10)
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -93,11 +117,42 @@ def extract_tracks(result: Any) -> dict[int, BBox]:
     if boxes is None or boxes.id is None:
         return {}
     ids = boxes.id.int().cpu().tolist()
+    classes = boxes.cls.int().cpu().tolist()
     coordinates = boxes.xyxy.int().cpu().tolist()
     return {
         int(tracker_id): tuple(int(value) for value in bbox)
-        for tracker_id, bbox in zip(ids, coordinates)
+        for tracker_id, class_id, bbox in zip(ids, classes, coordinates)
+        if int(class_id) == 0
     }
+
+
+def extract_detections(
+    result: Any,
+    class_names: dict[int, str],
+) -> list[dict[str, object]]:
+    boxes = result.boxes
+    if boxes is None:
+        return []
+    classes = boxes.cls.int().cpu().tolist()
+    coordinates = boxes.xyxy.int().cpu().tolist()
+    confidences = boxes.conf.cpu().tolist()
+    ids: list[int | None]
+    if boxes.id is None:
+        ids = [None] * len(classes)
+    else:
+        ids = [int(value) for value in boxes.id.int().cpu().tolist()]
+    return [
+        {
+            "class_id": int(class_id),
+            "label": str(class_names.get(int(class_id), class_id)),
+            "bbox": tuple(int(value) for value in bbox),
+            "confidence": float(confidence),
+            "tracker_id": tracker_id,
+        }
+        for class_id, bbox, confidence, tracker_id in zip(
+            classes, coordinates, confidences, ids
+        )
+    ]
 
 
 class WebCameraProcessor:
@@ -221,6 +276,12 @@ class WebCameraProcessor:
             min_face_pixels=int(
                 tailgating_config.get("min_face_pixels", 36)
             ),
+            require_eye_confirmation=bool(
+                tailgating_config.get("require_eye_confirmation", True)
+            ),
+            min_face_sharpness=float(
+                tailgating_config.get("min_face_sharpness", 35)
+            ),
             save_event_clip=bool(
                 tailgating_config.get("save_event_clip", False)
             ),
@@ -241,10 +302,27 @@ class WebCameraProcessor:
         )
         self.pending_clip_notifications: dict[str, dict[str, object]] = {}
         self.pending_clip_events: dict[str, dict[str, object]] = {}
+        # Maps a pending clip path to the persisted event row id so the DB
+        # record can be updated once the clip finishes encoding.
+        self.pending_clip_db_ids: dict[str, int] = {}
+        self.event_store = EventStore(
+            logging_config.get("event_db", "data/gym_sentry.db")
+        )
 
         self.model = YOLO(str(detection_config.get("model", "yolo11n.pt")))
+        self.search_spec: SearchSpec = inactive_search()
+        self.search_matches: list[dict[str, object]] = []
+        self.search_last_checked_at: str | None = None
         # Optional inference tuning: device ("cpu"/"mps"/"cuda"/0) and imgsz.
-        self.inference_device = detection_config.get("device") or None
+        configured_device = detection_config.get("device")
+        if configured_device not in (None, ""):
+            self.inference_device = configured_device
+        elif torch.cuda.is_available():
+            self.inference_device = 0
+        elif torch.backends.mps.is_available():
+            self.inference_device = "mps"
+        else:
+            self.inference_device = None
         self.inference_imgsz = detection_config.get("imgsz") or None
         # Face detection (Haar) is costly; only run it every Nth processed frame.
         self.face_sample_every = max(
@@ -286,6 +364,10 @@ class WebCameraProcessor:
             self.last_frame_at = wall_now
 
             if self.require_focus_area and not self.focus_enabled:
+                self.search_matches = []
+                self.search_last_checked_at = wall_now.isoformat(
+                    timespec="seconds"
+                )
                 self._buffer_clip_frame(frame, None, monotonic_now)
                 return {
                     **self._status_locked(wall_now),
@@ -294,9 +376,15 @@ class WebCameraProcessor:
                     "tracks": [],
                 }
 
+            search_class_ids = (
+                self.search_spec.class_ids
+                if self.search_spec.active
+                else ()
+            )
+            detection_classes = list(dict.fromkeys((0, *search_class_ids)))
             track_kwargs: dict[str, Any] = {
                 "persist": True,
-                "classes": [0],
+                "classes": detection_classes,
                 "conf": float(self.detection_config.get("confidence", 0.35)),
                 "iou": float(self.detection_config.get("iou", 0.5)),
                 "tracker": str(
@@ -309,7 +397,13 @@ class WebCameraProcessor:
             if self.inference_imgsz is not None:
                 track_kwargs["imgsz"] = int(self.inference_imgsz)
             results = self.model.track(frame, **track_kwargs)
-            tracks = extract_tracks(results[0]) if results else {}
+            model_result = results[0] if results else None
+            tracks = extract_tracks(model_result) if model_result is not None else {}
+            detections = (
+                extract_detections(model_result, self.model.names)
+                if model_result is not None
+                else []
+            )
             anchors: dict[int, Point] = {}
 
             self._last_active_ids = set(tracks.keys())
@@ -365,6 +459,17 @@ class WebCameraProcessor:
                     current_inside=max(0, self.total_in - self.total_out),
                     timestamp=wall_now,
                 )
+                self.event_store.record_event(
+                    category="crossing",
+                    camera_name=self.camera_name,
+                    timestamp=wall_now,
+                    event_type=crossing.direction,
+                    tracker_id=tracker_id,
+                    reason="LINE_CROSSING",
+                    total_in=self.total_in,
+                    total_out=self.total_out,
+                    current_inside=max(0, self.total_in - self.total_out),
+                )
 
             self.line_counter.expire_inactive(
                 set(tracks), monotonic_now
@@ -397,6 +502,12 @@ class WebCameraProcessor:
             else:
                 self.detector.check_door_zone([], wall_now)
 
+            self._update_search_matches(
+                frame,
+                detections,
+                tracks,
+                wall_now,
+            )
             self._update_gate(frame, width, height, wall_now, monotonic_now)
 
             if monotonic_now >= self.alert_until:
@@ -501,6 +612,108 @@ class WebCameraProcessor:
                 self.line_counter.reset()
             return self._status_locked(datetime.now().astimezone())
 
+    def query_events(
+        self,
+        category: str | None,
+        limit: int,
+        offset: int,
+    ) -> dict[str, object]:
+        try:
+            result = self.event_store.query(
+                category=category, limit=limit, offset=offset
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            **result,
+            "items": [self._event_with_urls(row) for row in result["items"]],
+        }
+
+    @staticmethod
+    def _event_with_urls(row: dict[str, object]) -> dict[str, object]:
+        """Replace internal evidence paths with dashboard-usable URLs."""
+        path_fields = {"snapshot_path", "body_path", "face_path", "clip_path"}
+        enriched = {
+            key: value for key, value in row.items() if key not in path_fields
+        }
+        to_url = WebCameraProcessor._snapshot_url
+        enriched["snapshot_url"] = to_url(str(row.get("snapshot_path") or ""))
+        enriched["body_url"] = to_url(str(row.get("body_path") or ""))
+        enriched["face_url"] = to_url(str(row.get("face_path") or ""))
+        enriched["clip_url"] = to_url(str(row.get("clip_path") or ""))
+        return enriched
+
+    def update_tailgating_settings(
+        self, payload: TailgatingSettingsPayload
+    ) -> dict[str, object]:
+        mode = (payload.detection_mode or "entry_burst").lower()
+        if mode not in {"entry_burst", "access_token"}:
+            raise ValueError(
+                "detection_mode must be entry_burst or access_token"
+            )
+        window = float(payload.tailgating_time_window_seconds)
+        with self.lock:
+            mode_changed = mode != self.detection_mode
+            self.detection_mode = mode
+            self.minimum_people = int(payload.minimum_people)
+            tailgating = self.config.setdefault("tailgating", {})
+            tailgating["enabled"] = bool(payload.enabled)
+            tailgating["detection_mode"] = mode
+            tailgating["minimum_people"] = self.minimum_people
+            tailgating["tailgating_time_window_seconds"] = window
+            tailgating["token_valid_seconds"] = float(payload.token_valid_seconds)
+            tailgating["max_people_per_token"] = int(payload.max_people_per_token)
+            self.tailgating_config = tailgating
+
+            alert_cooldown = float(tailgating.get("alert_cooldown_seconds", 5))
+            self.detector.enabled = bool(payload.enabled)
+            self.detector.window = timedelta(seconds=window)
+            self.entry_burst_detector = EntryBurstDetector(
+                minimum_people=self.minimum_people,
+                time_window_seconds=window,
+                alert_cooldown_seconds=alert_cooldown,
+            )
+            self.token_store.token_valid_seconds = float(
+                payload.token_valid_seconds
+            )
+            self.token_store.max_people_per_token = int(
+                payload.max_people_per_token
+            )
+
+            if mode_changed:
+                # Switching modes clears authorization tokens and transient
+                # detection state, but counts and event history are preserved.
+                self.token_store.clear()
+                self.detector.reset()
+                self.entry_burst_detector.reset()
+                self.alert_until = 0.0
+                self.alert_tracker = None
+                self.alert_text = "NORMAL"
+
+            self._save_config_locked()
+            return self._status_locked(datetime.now().astimezone())
+
+    def _save_config_locked(self) -> None:
+        """Atomically persist the in-memory config to ``config_path``."""
+        directory = self.config_path.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=str(directory),
+            suffix=".tmp",
+            delete=False,
+        )
+        temp_path = handle.name
+        try:
+            with handle:
+                yaml.safe_dump(self.config, handle, sort_keys=False)
+            os.replace(temp_path, self.config_path)
+        except BaseException:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
     def start_camera_stream(self) -> None:
         """(Re)start the server-side capture thread to match the current mode."""
         if self.ip_stream is not None:
@@ -545,8 +758,7 @@ class WebCameraProcessor:
             camera["source"] = self.camera_source
             camera["rtsp_transport"] = self.rtsp_transport
             camera["target_fps"] = self.target_fps
-            with self.config_path.open("w", encoding="utf-8") as handle:
-                yaml.safe_dump(self.config, handle, sort_keys=False)
+            self._save_config_locked()
         # Start/stop the capture thread outside the lock (the thread needs it).
         self.start_camera_stream()
         return self.status()
@@ -564,6 +776,16 @@ class WebCameraProcessor:
             if self.line_counter is not None:
                 self.line_counter.reset()
             self._reset_model_tracker()
+            return self._status_locked(datetime.now().astimezone())
+
+    def update_search(self, query: str) -> dict[str, object]:
+        with self.lock:
+            self.search_spec = parse_search_query(
+                query,
+                self.model.names,
+            )
+            self.search_matches = []
+            self.search_last_checked_at = None
             return self._status_locked(datetime.now().astimezone())
 
     def _reset_model_tracker(self) -> None:
@@ -612,8 +834,7 @@ class WebCameraProcessor:
             self.config["door_zone"]["enabled"] = self.door_enabled
             self.config.setdefault("gate_zone", {})["points"] = gate_points
             self.config["gate_zone"]["enabled"] = self.gate_enabled
-            with self.config_path.open("w", encoding="utf-8") as handle:
-                yaml.safe_dump(self.config, handle, sort_keys=False)
+            self._save_config_locked()
             self.line_counter = None
             if self.frame_size is not None:
                 self._ensure_line_counter(*self.frame_size)
@@ -625,6 +846,7 @@ class WebCameraProcessor:
         with self.lock:
             self.event_capture.close()
         self.notification_executor.shutdown(wait=False, cancel_futures=False)
+        self.event_store.close()
 
     def save_telegram_settings(
         self, payload: TelegramSettingsPayload
@@ -731,6 +953,28 @@ class WebCameraProcessor:
                 img, f"ID {track['tracker_id']}", (x1 + 3, max(18, y1 - 6)),
                 font, 0.6, color, 2, cv2.LINE_AA,
             )
+        if draw_guides:
+            for match in result.get("search", {}).get("matches", []):
+                x1, y1, x2, y2 = (int(v) for v in match["bbox"])
+                color = (0, 210, 255)
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 4)
+                label = str(match.get("label", "MATCH")).upper()
+                cv2.putText(
+                    img,
+                    label,
+                    (x1 + 3, max(20, y1 - 8)),
+                    font,
+                    0.68,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+                object_bbox = match.get("object_bbox")
+                if object_bbox:
+                    ox1, oy1, ox2, oy2 = (int(v) for v in object_bbox)
+                    cv2.rectangle(
+                        img, (ox1, oy1), (ox2, oy2), (255, 184, 59), 2
+                    )
         line_points = result.get("line_points") or []
         if draw_guides and len(line_points) == 2:
             sx, sy = int(line_points[0][0] * width), int(line_points[0][1] * height)
@@ -810,6 +1054,15 @@ class WebCameraProcessor:
                 "duration_seconds": gate_event.duration_seconds,
             }
         )
+        self.event_store.record_event(
+            category="gate",
+            camera_name=self.camera_name,
+            timestamp=wall_now,
+            event_type=gate_event.event_type,
+            reason="GATE_MOTION",
+            motion_ratio=round(gate_event.motion_ratio, 3),
+            duration_seconds=gate_event.duration_seconds,
+        )
 
     def _record_security_event(
         self,
@@ -874,8 +1127,24 @@ class WebCameraProcessor:
             "telegram_video_sent": False,
         }
         self.recent_events.appendleft(event)
+        event_id = self.event_store.record_event(
+            category="security",
+            camera_name=self.camera_name,
+            timestamp=wall_now,
+            event_type=result.event_type or "TAILGATING_DETECTED",
+            tracker_id=result.tracker_id,
+            reason=result.reason,
+            snapshot_path=snapshot_path,
+            body_path=body_path,
+            face_path=face_path,
+            total_in=self.total_in,
+            total_out=self.total_out,
+            current_inside=max(0, self.total_in - self.total_out),
+        )
         if clip_path:
-            self.pending_clip_events[str(Path(clip_path))] = event
+            normalized_clip = str(Path(clip_path))
+            self.pending_clip_events[normalized_clip] = event
+            self.pending_clip_db_ids[normalized_clip] = event_id
         # Send only one Telegram alert per incident: show_alert honours
         # alert_cooldown_seconds, so a burst of people produces a single message
         # instead of one per person.
@@ -929,8 +1198,26 @@ class WebCameraProcessor:
                     "tailgating_time_window_seconds", 4
                 )
             ),
+            "tailgating_settings": {
+                "enabled": bool(self.tailgating_config.get("enabled", True)),
+                "detection_mode": self.detection_mode,
+                "minimum_people": self.minimum_people,
+                "tailgating_time_window_seconds": float(
+                    self.tailgating_config.get(
+                        "tailgating_time_window_seconds", 4
+                    )
+                ),
+                "token_valid_seconds": float(
+                    self.tailgating_config.get("token_valid_seconds", 6)
+                ),
+                "max_people_per_token": int(
+                    self.tailgating_config.get("max_people_per_token", 1)
+                ),
+            },
+            "event_totals": self.event_store.totals(),
             "security": self.alert_text,
             "security_alert": security_alert,
+            "search": self._search_status_locked(),
             "camera_mode": self.camera_mode,
             "source_mode": self.source_mode,
             "camera_source": str(self.camera_source),
@@ -939,6 +1226,11 @@ class WebCameraProcessor:
             ),
             "rtsp_transport": self.rtsp_transport,
             "target_fps": self.target_fps,
+            "inference_device": (
+                str(self.inference_device)
+                if self.inference_device is not None
+                else "cpu"
+            ),
             "ip_camera": (
                 self.ip_stream.status() if self.ip_stream is not None else None
             ),
@@ -990,13 +1282,105 @@ class WebCameraProcessor:
             "telegram": self.telegram.safe_status(),
         }
 
+    def _search_status_locked(self) -> dict[str, object]:
+        spec = self.search_spec
+        count = len(self.search_matches)
+        if not spec.supported:
+            message = spec.message
+        elif not spec.active:
+            message = spec.message
+        elif count:
+            noun = "match" if count == 1 else "matches"
+            message = f"Found {count} {noun} for {spec.target}."
+        else:
+            message = spec.message
+        return {
+            "active": spec.active,
+            "supported": spec.supported,
+            "query": spec.query,
+            "mode": spec.mode,
+            "target": spec.target,
+            "message": message,
+            "count": count,
+            "found": count > 0,
+            "last_checked_at": self.search_last_checked_at,
+            "matches": list(self.search_matches),
+        }
+
+    def _update_search_matches(
+        self,
+        frame: np.ndarray,
+        detections: list[dict[str, object]],
+        people: dict[int, BBox],
+        wall_now: datetime,
+    ) -> None:
+        spec = self.search_spec
+        matches: list[dict[str, object]] = []
+        if spec.active and spec.mode == "object":
+            for detection in detections:
+                if int(detection["class_id"]) not in spec.class_ids:
+                    continue
+                matches.append(
+                    {
+                        "bbox": list(detection["bbox"]),
+                        "label": str(detection["label"]),
+                        "confidence": round(
+                            float(detection["confidence"]), 3
+                        ),
+                        "tracker_id": detection["tracker_id"],
+                    }
+                )
+        elif spec.active and spec.mode == "person_with_object":
+            objects = [
+                detection
+                for detection in detections
+                if int(detection["class_id"]) in spec.class_ids
+            ]
+            for tracker_id, person_bbox in people.items():
+                for detection in objects:
+                    object_bbox = detection["bbox"]
+                    if not object_inside_person(object_bbox, person_bbox):
+                        continue
+                    matches.append(
+                        {
+                            "bbox": list(person_bbox),
+                            "object_bbox": list(object_bbox),
+                            "label": (
+                                f"person with {detection['label']}"
+                            ),
+                            "confidence": round(
+                                float(detection["confidence"]), 3
+                            ),
+                            "tracker_id": tracker_id,
+                        }
+                    )
+                    break
+        elif spec.active and spec.mode == "shirt_color":
+            for tracker_id, person_bbox in people.items():
+                color, score = estimate_shirt_color(frame, person_bbox)
+                if color != spec.color:
+                    continue
+                matches.append(
+                    {
+                        "bbox": list(person_bbox),
+                        "label": f"{color} shirt",
+                        "confidence": round(score, 3),
+                        "tracker_id": tracker_id,
+                    }
+                )
+        self.search_matches = matches
+        self.search_last_checked_at = wall_now.isoformat(timespec="seconds")
+
     def _complete_event_clip(self, clip_path: str) -> None:
         path = str(Path(clip_path))
         notification = self.pending_clip_notifications.pop(path, None)
         event = self.pending_clip_events.pop(path, None)
+        event_id = self.pending_clip_db_ids.pop(path, None)
         if event is not None:
             event["clip_url"] = self._snapshot_url(path)
             event["clip_pending"] = False
+        if event_id is not None:
+            self.event_store.update_clip_path(event_id, path)
         if notification is not None:
             notification_event = notification["event"]
             self.notification_executor.submit(
@@ -1116,9 +1500,15 @@ class WebCameraProcessor:
         return ""
 
 
-def create_web_app(config_path: Path) -> FastAPI:
-    config = load_config(config_path)
-    processor = WebCameraProcessor(config_path, config)
+def create_web_app(
+    config_path: Path,
+    processor: "WebCameraProcessor | None" = None,
+) -> FastAPI:
+    if processor is None:
+        config = load_config(config_path)
+        processor = WebCameraProcessor(config_path, config)
+    else:
+        config = processor.config
     dashboard_path = Path(__file__).with_name("web_dashboard.html")
     captures_dir = Path("captures").resolve()
     captures_dir.mkdir(parents=True, exist_ok=True)
@@ -1149,6 +1539,19 @@ def create_web_app(config_path: Path) -> FastAPI:
     @app.get("/status")
     def status() -> dict[str, object]:
         return processor.status()
+
+    @app.get("/events")
+    def events(
+        category: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        try:
+            return processor.query_events(
+                category=category, limit=limit, offset=offset
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/video-feed")
     def video_feed() -> StreamingResponse:
@@ -1224,6 +1627,19 @@ def create_web_app(config_path: Path) -> FastAPI:
     @app.post("/control/reset-tracking")
     def reset_tracking() -> dict[str, object]:
         return processor.reset_tracking()
+
+    @app.post("/control/search")
+    def control_search(payload: SearchPayload) -> dict[str, object]:
+        return processor.update_search(payload.query)
+
+    @app.post("/control/tailgating")
+    def control_tailgating(
+        payload: TailgatingSettingsPayload,
+    ) -> dict[str, object]:
+        try:
+            return processor.update_tailgating_settings(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/control/setup")
     def save_setup(payload: SetupPayload) -> dict[str, object]:

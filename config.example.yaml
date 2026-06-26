@@ -45,6 +45,8 @@ tailgating:
   capture_face_closeup: true
   face_padding_percent: 0.3
   min_face_pixels: 36
+  require_eye_confirmation: true
+  min_face_sharpness: 35
   save_event_clip: true
   clip_pre_seconds: 3
   clip_post_seconds: 0
@@ -70,3 +72,4 @@ logging:
   people_count_csv: logs/people_count_log.csv
   security_events_csv: logs/security_events.csv
   gate_events_csv: logs/gate_events.csv
+  event_db: data/gym_sentry.db

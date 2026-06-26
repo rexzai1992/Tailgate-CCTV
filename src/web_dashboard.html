@@ -70,6 +70,17 @@
     }
     .telegram-actions button:last-child { grid-column: 1 / -1; }
     .delivery { margin-top: 7px; color: var(--muted); font-size: 11px; }
+    .find-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .find-row input {
+      min-width: 0; width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+      border-radius: 9px; background: #0d151c; color: var(--text);
+    }
+    .find-status {
+      min-height: 20px; margin-top: 10px; color: var(--muted);
+      font-size: 12px; line-height: 1.45;
+    }
+    .find-status.found { color: var(--amber); font-weight: 700; }
+    .find-status.error { color: var(--red); }
     header {
       height: 70px;
       display: flex;
@@ -340,6 +351,29 @@
         <div class="stack" style="margin-top:10px;">
           <button class="primary" id="saveCamera">Save camera source</button>
         </div>
+      </section>
+
+      <section class="panel">
+        <h2>Find in camera</h2>
+        <div class="find-row">
+          <input
+            id="findQuery"
+            autocomplete="off"
+            placeholder="phone, backpack, red shirt…"
+            aria-label="Object or clothing search"
+          >
+          <button class="blue" id="findButton">Search</button>
+        </div>
+        <p class="hint">
+          Try phone, person holding phone, backpack, bottle, laptop, or red shirt.
+          Matches are highlighted in yellow.
+        </p>
+        <div class="find-status" id="findStatus">
+          Enter an object or shirt color to search the live camera.
+        </div>
+        <button id="clearFind" style="width:100%;margin-top:8px;display:none;">
+          Clear search
+        </button>
       </section>
 
       <section class="panel">
@@ -655,10 +689,29 @@
         gateState === "MOVING" ? "var(--amber)"
           : gateState === "STILL" ? "var(--green)"
             : "var(--muted)";
+      updateSearchStatus(status.search || {});
       updateTelegramStatus(status.telegram || {});
       renderEvents(status.recent_events || []);
       renderEntries(status.recent_entries || []);
       renderGateEvents(status.recent_gate_events || []);
+    }
+
+    function updateSearchStatus(search) {
+      const input = document.getElementById("findQuery");
+      const status = document.getElementById("findStatus");
+      const clear = document.getElementById("clearFind");
+      if (!input || !status || !clear) return;
+      if (document.activeElement !== input && search.query != null) {
+        input.value = search.query;
+      }
+      status.textContent = search.message ||
+        "Enter an object or shirt color to search the live camera.";
+      status.classList.toggle("found", Boolean(search.found));
+      status.classList.toggle(
+        "error",
+        search.supported === false && Boolean(search.query)
+      );
+      clear.style.display = search.query ? "block" : "none";
     }
 
     function renderGateEvents(events) {
@@ -990,8 +1043,8 @@
     }
 
     async function sendFrame() {
-      if (cameraMode === "ip") return;
-      if (!cameraRunning || processing || video.readyState < 2) return;
+      if (cameraMode === "ip") return false;
+      if (!cameraRunning || processing || video.readyState < 2) return false;
       processing = true;
       try {
         const rect = sourceRect();
@@ -1010,7 +1063,7 @@
         );
         captureCtx.restore();
         const blob = await new Promise(resolve => capture.toBlob(resolve, "image/jpeg", 0.78));
-        if (!blob) return;
+        if (!blob) return false;
         sentFrames += 1;
         const status = await api("/process-frame", {
           method: "POST",
@@ -1020,10 +1073,25 @@
         latestTracks = status.tracks || [];
         processedFrames += 1;
         updateStatus(status);
+        return true;
       } catch (error) {
         document.getElementById("processingStatus").textContent = `Processing error: ${error.message}`;
+        return false;
       } finally {
         processing = false;
+      }
+    }
+
+    async function runAiAtTargetRate() {
+      const frameIntervalMs = 1000 / 15;
+      while (true) {
+        const startedAt = performance.now();
+        const processed = await sendFrame();
+        const elapsed = performance.now() - startedAt;
+        const delay = processed
+          ? Math.max(0, frameIntervalMs - elapsed)
+          : 50;
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
     }
 
@@ -1140,6 +1208,37 @@
             diagnosticText,
             x1 * sx + 4,
             Math.max(20, y1 * sy - 7)
+          );
+        });
+        const searchMatches = latest?.search?.matches || [];
+        searchMatches.forEach(match => {
+          const [x1, y1, x2, y2] = match.bbox;
+          const sx = overlay.width / sourceWidth;
+          const sy = overlay.height / sourceHeight;
+          ctx.strokeStyle = "#ffc449";
+          ctx.lineWidth = 5;
+          ctx.strokeRect(
+            x1 * sx,
+            y1 * sy,
+            (x2 - x1) * sx,
+            (y2 - y1) * sy
+          );
+          if (match.object_bbox) {
+            const [ox1, oy1, ox2, oy2] = match.object_bbox;
+            ctx.lineWidth = 3;
+            ctx.strokeRect(
+              ox1 * sx,
+              oy1 * sy,
+              (ox2 - ox1) * sx,
+              (oy2 - oy1) * sy
+            );
+          }
+          ctx.fillStyle = "#ffc449";
+          ctx.font = `800 ${Math.max(14, overlay.width / 55)}px system-ui`;
+          ctx.fillText(
+            String(match.label || "MATCH").toUpperCase(),
+            x1 * sx + 4,
+            Math.max(22, y1 * sy - 9)
           );
         });
 
@@ -1410,6 +1509,39 @@
     document.getElementById("cameraModeSelect").addEventListener("change", event => {
       showSourceFields(event.target.value);
     });
+    async function runFindSearch(query) {
+      const button = document.getElementById("findButton");
+      button.disabled = true;
+      button.textContent = "Searching…";
+      try {
+        const status = await api("/control/search", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({query})
+        });
+        updateStatus(status);
+      } catch (error) {
+        const node = document.getElementById("findStatus");
+        node.textContent = `Search failed: ${error.message}`;
+        node.classList.add("error");
+      } finally {
+        button.disabled = false;
+        button.textContent = "Search";
+      }
+    }
+    document.getElementById("findButton").addEventListener("click", () => {
+      runFindSearch(document.getElementById("findQuery").value.trim());
+    });
+    document.getElementById("findQuery").addEventListener("keydown", event => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runFindSearch(event.target.value.trim());
+      }
+    });
+    document.getElementById("clearFind").addEventListener("click", () => {
+      document.getElementById("findQuery").value = "";
+      runFindSearch("");
+    });
     document.getElementById("saveCamera").addEventListener("click", async () => {
       const sourceMode = document.getElementById("cameraModeSelect").value;
       const url = document.getElementById("cameraUrl").value.trim();
@@ -1493,7 +1625,7 @@
         }
       });
     }
-    setInterval(sendFrame, 220);
+    runAiAtTargetRate();
     setInterval(refreshStatus, 1000);
     setInterval(() => {
       const now = performance.now();
@@ -1502,7 +1634,7 @@
       document.getElementById("processingStatus").textContent = cameraRunning
         ? latest?.detection_paused_reason
           ? "AI paused until doorway focus is set"
-          : `AI processing ${rate.toFixed(1)} FPS`
+          : `AI processing ${rate.toFixed(1)} FPS · max 15`
         : "Waiting for camera";
       processedFrames = 0;
       sentFrames = 0;

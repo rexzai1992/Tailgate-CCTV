@@ -191,9 +191,73 @@ Common response fields:
 | `camera_mode` | `browser` or `ip`. |
 | `calibration_ready` | Whether detection is ready to process crossings. |
 | `last_frame_at` | Time of the most recently processed frame. |
+| `tailgating_settings` | The active tailgating configuration (mode, thresholds, token settings). |
+| `event_totals` | Lifetime persisted event counts: `{security, crossing, gate, all}`. |
+
+`recent_events`, `recent_entries`, and `recent_gate_events` are short in-memory
+windows for the live dashboard. For durable history that survives restarts and
+counter resets, use `GET /events` instead.
 
 Gym Sentry currently exposes status through polling rather than outbound
 webhooks. A normal polling interval is one to five seconds.
+
+### Read persistent event history
+
+```http
+GET /events
+```
+
+Returns crossing, security (tailgating), and gate events from a local SQLite
+database that persists across restarts. Resetting the live counters does not
+delete this history.
+
+Query parameters:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `category` | _(all)_ | Filter by `security`, `crossing`, or `gate`. |
+| `limit` | `50` | Page size (1–500). |
+| `offset` | `0` | Number of records to skip. |
+
+Example:
+
+```bash
+curl "http://127.0.0.1:8080/events?category=security&limit=20"
+```
+
+Response:
+
+```json
+{
+  "items": [
+    {
+      "id": 42,
+      "category": "security",
+      "event_type": "TAILGATING_DETECTED",
+      "camera_name": "Main Entrance",
+      "tracker_id": 7,
+      "reason": "2_PEOPLE_ENTERED_WITHIN_WINDOW",
+      "timestamp": "2026-06-21T12:30:05+08:00",
+      "total_in": 12,
+      "total_out": 5,
+      "current_inside": 7,
+      "snapshot_url": "/captures/tailgating/...jpg",
+      "body_url": "/captures/tailgating/...jpg",
+      "face_url": "/captures/tailgating/...jpg",
+      "clip_url": "/captures/tailgating/...mp4"
+    }
+  ],
+  "total": 1,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+Items are returned newest first. Evidence URLs are relative to the Gym Sentry
+base URL and are empty when no media was saved. External `person_ref` values
+are never stored in this database. A security event's `clip_url` is filled in
+asynchronously once the video clip finishes encoding, so a follow-up read may
+show a clip that was empty in an earlier response.
 
 ### Send a camera frame
 
@@ -319,6 +383,8 @@ These endpoints are intended for trusted setup tools, not normal member scans:
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/control/camera` | Select browser webcam or direct RTSP mode. |
+| `POST` | `/control/tailgating` | Configure and persist tailgating mode and thresholds. |
+| `POST` | `/control/search` | Start or clear a live object or shirt-color search. |
 | `POST` | `/control/setup` | Save focus area, counting line, door zone, and gate zone. |
 | `POST` | `/control/reset` | Reset counts and detection state. |
 | `POST` | `/control/reset-tracking` | Reset tracker IDs without changing counts. |
@@ -328,6 +394,39 @@ These endpoints are intended for trusted setup tools, not normal member scans:
 | `POST` | `/telegram/test` | Send a test Telegram notification. |
 
 Use the generated `/docs` page for the current payload schema.
+
+### Configure tailgating detection
+
+```http
+POST /control/tailgating
+Content-Type: application/json
+```
+
+```json
+{
+  "enabled": true,
+  "detection_mode": "entry_burst",
+  "minimum_people": 2,
+  "tailgating_time_window_seconds": 4,
+  "token_valid_seconds": 6,
+  "max_people_per_token": 1
+}
+```
+
+| Field | Bounds | Description |
+|---|---|---|
+| `enabled` | bool | Turn tailgating detection on or off. |
+| `detection_mode` | `entry_burst` or `access_token` | Group-entry detection vs. external authorization tokens. |
+| `minimum_people` | 2–10 | Group size that triggers an `entry_burst` alert. |
+| `tailgating_time_window_seconds` | 0–60 | Rolling window for grouping entries. |
+| `token_valid_seconds` | 0–120 | How long an authorization token stays valid (`access_token` mode). |
+| `max_people_per_token` | 1–10 | IN crossings one token permits (`access_token` mode). |
+
+The settings are validated, applied to the running detector, and saved
+atomically to `config.yaml`. Changing `detection_mode` clears authorization
+tokens and transient detection state but preserves IN/OUT counts and the
+persistent event history. A rejected payload returns `422` (out-of-range
+value) or `400` (invalid mode).
 
 ## Security
 
@@ -367,6 +466,7 @@ An external plugin should depend only on:
 - `GET /health`
 - `POST /access-event`
 - `GET /status`
+- `GET /events`
 - optionally `POST /process-frame`
 - the published OpenAPI schema at `/openapi.json`
 
