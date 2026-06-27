@@ -127,7 +127,7 @@ class EventCapture:
         save_clip: bool = True,
     ) -> str:
         current = event_time or datetime.now().astimezone()
-        stamp = current.strftime("%Y%m%d_%H%M%S")
+        stamp = current.strftime("%Y%m%d_%H%M%S_%f")
         base = f"tailgating_{stamp}_{slugify(camera_name)}_id{tracker_id}"
         snapshot_path = self.output_dir / f"{base}.jpg"
 
@@ -187,7 +187,7 @@ class EventCapture:
         """Deterministic path of the clip ``capture_event`` will finalize."""
         if not self.save_event_clip:
             return ""
-        stamp = (event_time or datetime.now().astimezone()).strftime("%Y%m%d_%H%M%S")
+        stamp = (event_time or datetime.now().astimezone()).strftime("%Y%m%d_%H%M%S_%f")
         base = f"tailgating_{stamp}_{slugify(camera_name)}_id{tracker_id}"
         return str(self.output_dir / "clips" / f"{base}.mp4")
 
@@ -231,7 +231,7 @@ class EventCapture:
             )
 
         current = event_time or datetime.now().astimezone()
-        stamp = current.strftime("%Y%m%d_%H%M%S")
+        stamp = current.strftime("%Y%m%d_%H%M%S_%f")
         filename = (
             f"tailgating_{stamp}_{slugify(camera_name)}_"
             f"id{tracker_id}_body.jpg"
@@ -252,7 +252,7 @@ class EventCapture:
         if not self.capture_face_closeup_enabled or bbox is None:
             return ""
         current = event_time or datetime.now().astimezone()
-        stamp = current.strftime("%Y%m%d_%H%M%S")
+        stamp = current.strftime("%Y%m%d_%H%M%S_%f")
         filename = (
             f"tailgating_{stamp}_{slugify(camera_name)}_"
             f"id{tracker_id}_face.jpg"
@@ -273,7 +273,7 @@ class EventCapture:
         if not self.capture_entry_face_enabled or bbox is None:
             return ""
         current = event_time or datetime.now().astimezone()
-        stamp = current.strftime("%Y%m%d_%H%M%S")
+        stamp = current.strftime("%Y%m%d_%H%M%S_%f")
         filename = (
             f"entry_{stamp}_{slugify(camera_name)}_id{tracker_id}_face.jpg"
         )

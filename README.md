@@ -10,15 +10,19 @@ group entries, saves local evidence, and can send Telegram alerts. It does
 ## Features
 
 - Anonymous IN/OUT people counting with YOLO tracking
-- Browser webcam, USB camera, and direct RTSP camera support
-- Configurable doorway focus area and directional counting line
-- Group-entry and access-token tailgating modes
-- Tailgating snapshots, body crops, optional face crops, and short clips
+- Browser webcam, server-side local camera, and direct RTSP camera support
+- Configurable doorway focus area and a counting line that only counts between
+  its endpoints
+- Group-entry and access-token tailgating modes, configurable from the dashboard
+- Tailgating snapshots, body crops, optional face crops, and event clips
+- Persistent SQLite event history with a review/export workflow
 - Gate or turnstile movement detection
 - On-demand live search for standard objects and basic shirt colors
-- Telegram photo, video, and test notifications
-- CSV logs and a live local dashboard
+- Telegram alerts to one or many recipients (including groups), with a captioned
+  photo for every event and a captioned clip per incident
+- CSV logs and a live local dashboard with a settings panel
 - Local HTTP API for access-control and camera-system plugins
+- Runs from source, in Docker, or as a packaged Windows app
 
 ## Quick start
 
@@ -93,6 +97,70 @@ persist across rebuilds:
 - Keep RTSP credentials (`config.yaml`) and Telegram secrets (`secrets/`) out of
   version control; both paths are already covered by `.gitignore` and
   `.dockerignore`.
+
+## Build a Windows app
+
+CCTV Tailgate can be packaged into a standalone Windows application with
+[PyInstaller](https://pyinstaller.org/). The packaged app captures the camera
+**server-side**, so the camera permission is granted once by Windows and the
+browser never prompts for it.
+
+### What the target PC needs: nothing
+
+The installer is fully self-contained. A fresh Windows PC needs **no Python, no
+package manager, and no internet connection**:
+
+- Python and every library (OpenCV, PyTorch, Ultralytics) are bundled in the
+  app.
+- The YOLO model is bundled, so the first run works offline.
+- The Visual C++ runtime is installed automatically by the installer if it is
+  missing.
+
+The end user just runs the installer and clicks **Launch**.
+
+### Build the app (on a build machine)
+
+Only the **build** machine needs Python 3.11 or 3.12. From the project root on
+Windows:
+
+```bat
+build_windows.bat
+```
+
+This produces `dist\CCTV-Tailgate\CCTV-Tailgate.exe`. You can run that directly,
+or wrap it in a one-click installer (below). When launched, the app:
+
+- stores its data in `%LOCALAPPDATA%\CCTV Tailgate` (config, captures, logs,
+  events, secrets) — writable for any user, even when installed in Program
+  Files;
+- seeds `config.yaml` and the model there on first launch;
+- starts the service on `127.0.0.1:8080` and opens the dashboard; and
+- opens the local camera directly (`source_mode: local`, `source: "0"`). Set a
+  different **Camera number** in the dashboard's *Camera source* panel for a
+  second or third camera.
+
+> Build `yolo11n.pt` into the app by leaving it in the project root before
+> building (it is downloaded automatically the first time you run the app from
+> source). This guarantees the packaged app needs no internet.
+
+### Build a one-click installer (optional)
+
+To produce a single `CCTV-Tailgate-Setup.exe` that installs the app, creates
+shortcuts, and installs the Visual C++ runtime if needed:
+
+1. Build the app with `build_windows.bat` (above).
+2. Install [Inno Setup 6](https://jrsoftware.org/isdl.php) on the build machine.
+3. Download the [VC++ 2015–2022 x64 redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+   and save it as `packaging\redist\VC_redist.x64.exe`.
+4. Compile [`packaging\installer.iss`](packaging/installer.iss) (open it in Inno
+   Setup and press F9, or run `iscc packaging\installer.iss`).
+
+The output is `packaging\Output\CCTV-Tailgate-Setup.exe`, which is the file you
+distribute to fresh PCs.
+
+The build is defined by [`cctv-tailgate.spec`](cctv-tailgate.spec) with
+[`launcher.py`](launcher.py) as the entry point. PyInstaller builds are
+platform-specific, so build the Windows app on Windows.
 
 ## First-time setup
 
@@ -229,6 +297,27 @@ camera:
 Use **Refresh cameras** after connecting a new USB camera. If the saved camera
 is unavailable, CCTV Tailgate pauses instead of silently selecting another one.
 
+Because the browser captures the camera in this mode, it requests camera
+permission per session. For a fixed install that should only be approved once,
+use **Local camera** mode below.
+
+### Local camera (server-side)
+
+In `local` mode the app opens a camera attached to the server directly, so the
+operating system grants camera permission **once** and the browser never
+prompts. This is the recommended mode for a fixed install or the packaged
+Windows app.
+
+```yaml
+camera:
+  source_mode: local
+  source: "0"   # camera number: 0 = default device, 1 = next, ...
+```
+
+Select **Local camera (this device)** in the dashboard's *Camera source* panel
+and set the **Camera number**. The dashboard then shows the server-rendered
+feed instead of a browser preview.
+
 ### Direct IP or RTSP camera
 
 CCTV Tailgate can read a network camera directly on the server:
@@ -249,21 +338,29 @@ credentials private because `config.yaml` contains the complete URL.
 
 ## Dashboard controls
 
-- **Start camera** requests browser camera permission or restarts capture.
-- **Camera selector** switches between browser-visible cameras.
-- **Refresh cameras** rescans built-in and USB devices.
-- **Draw focus area** limits all processing and evidence to the doorway.
-- **Show full camera** removes the configured focus crop.
-- **Draw counting line** creates the directional crossing line.
-- **Show OUT arrow** enables or disables OUT counting.
+Top bar:
+
+- **Start camera** requests browser camera permission or restarts capture
+  (browser webcam mode).
+- **Camera selector** / **Refresh cameras** choose and rescan browser cameras.
+- **⚙ Settings** opens the settings panel for **detection engine / tailgating
+  mode and thresholds** and **Telegram alerts**.
+
+The **Setup tools** toggle (above the camera) reveals the calibration buttons:
+
+- **Draw focus area** limits all processing and evidence to the doorway, and
+  **Show full camera** removes the crop.
+- **Draw counting line** creates the directional crossing line; crossings only
+  count between its endpoints. **Show OUT arrow** enables OUT counting.
+- **Draw door zone** / **Draw gate zone** add an optional restricted-entry
+  polygon and a gate-motion region.
 - **Diagnostics** shows tracker and crossing-state details.
-- **Find in camera** searches for objects such as phones, bags, bottles, and
-  laptops, people holding visible objects, or basic shirt colors.
-- **Draw door zone** creates an optional restricted-entry polygon.
-- **Draw gate zone** outlines a moving gate, door, or turnstile component.
-- **Reset counts** clears IN/OUT totals and recent runtime state.
-- **Reset tracking** clears tracker IDs without changing IN/OUT totals.
-- **Save setup** persists the current geometry in `config.yaml`.
+- **Reset counts** clears IN/OUT totals; **Reset tracking** clears tracker IDs
+  without changing totals; **Save setup** persists the geometry to `config.yaml`.
+
+The right-hand **Find in camera** panel searches for objects such as phones,
+bags, bottles, and laptops, people holding visible objects, or basic shirt
+colors.
 
 The counting point is the bottom-center of each person box. The crossing guard
 rejects implausibly large one-frame jumps and rate-limits repeated crossings by
@@ -374,15 +471,26 @@ evidence and any `person_ref` values as sensitive operational data.
 
 ## Telegram alerts
 
-The dashboard can send a snapshot immediately after a tailgating event and the
-MP4 clip after recording finishes.
+Open **⚙ Settings → Telegram alerts** in the dashboard to configure alerts.
+Every tailgating event sends a **captioned snapshot** immediately, and each
+incident's MP4 **clip is sent (also captioned)** once recording finishes.
 
 1. Create a Telegram bot with `@BotFather`.
-2. Open the new bot and send `/start`.
-3. Paste the bot token into the **Telegram alerts** panel.
-4. Click **Find chat ID**.
+2. Open the new bot and send `/start` (and add it to your group if you want
+   group alerts).
+3. Paste the bot token into the **Telegram alerts** section.
+4. Click **Find chat (after /start)**, or enter the chat ID(s) manually.
 5. Enable alerts and save.
-6. Click **Send test notification**.
+6. Click **Send test**.
+
+**Multiple recipients:** the **Chat ID(s)** field accepts several recipients
+separated by commas or newlines — a group ID alerts everyone in the group, and
+you can also list individual user IDs. Add the bot to a group and use the
+group's (negative) ID to notify the whole team.
+
+**Throttling:** by default a photo is sent for every tailgating event. Set
+`tailgating.telegram_cooldown_seconds` in `config.yaml` to a value above `0` to
+rate-limit photos during large group entries.
 
 Telegram settings are stored locally in:
 
@@ -440,15 +548,57 @@ The API has no built-in authentication. It listens on `127.0.0.1` by default.
 Do not expose port `8080` directly to the public internet. Use an authenticated
 reverse proxy or private VPN if another machine must connect.
 
+## Architecture
+
+CCTV Tailgate is a single FastAPI service. `WebCameraProcessor`
+([src/web_server.py](src/web_server.py)) is the orchestrator: it runs detection
+on each frame, updates the line counter and tailgating detectors, captures
+evidence, persists events, and serves the dashboard and HTTP API.
+
+```text
+ Camera frame ─► Detection (YOLO) ─► LineZoneCounter ─► Tailgating detectors
+                                            │                    │
+                                            ▼                    ▼
+                                     EventCapture          EventStore (SQLite)
+                                  (snapshot/crops/clip)         + CSV logs
+                                            │                    │
+                                            └──► TelegramNotifier (photo + clip)
+```
+
+| Module | Responsibility |
+|---|---|
+| [src/main.py](src/main.py) | Entry point; loads config and runs uvicorn |
+| [src/web_server.py](src/web_server.py) | FastAPI app, routes, and the `WebCameraProcessor` orchestrator |
+| [src/web_dashboard.html](src/web_dashboard.html) | Single-page dashboard UI (HTML/CSS/JS, no build step) |
+| [src/counter.py](src/counter.py) | `LineZoneCounter` — segment-bounded line crossing; polygon test |
+| [src/tailgating_detector.py](src/tailgating_detector.py) | `EntryBurstDetector` and `TailgatingDetector` (token mode) |
+| [src/access_tokens.py](src/access_tokens.py) | `AccessTokenStore` — short-lived external authorizations |
+| [src/event_capture.py](src/event_capture.py) | Snapshots, body/face crops, and event clips |
+| [src/event_store.py](src/event_store.py) | `EventStore` — SQLite event history behind `/events` |
+| [src/security_logger.py](src/security_logger.py) | CSV loggers (counts, security, gate) |
+| [src/gate_detector.py](src/gate_detector.py) | `GateMotionDetector` — motion in the gate zone |
+| [src/search_detector.py](src/search_detector.py) | Live object / shirt-color search parsing and matching |
+| [src/telegram_notifier.py](src/telegram_notifier.py) | Multi-recipient Telegram delivery |
+| [src/ip_camera.py](src/ip_camera.py) | `IpCameraStream` — server-side capture for local and RTSP cameras |
+| [src/api_server.py](src/api_server.py) | `AccessEvent` model and the standalone access API |
+| [src/desktop_main.py](src/desktop_main.py) | Legacy standalone OpenCV desktop counter |
+| [launcher.py](launcher.py) | Windows app entry point (seeds data, starts server, opens browser) |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the request/data flow, camera modes,
+and deployment shapes (source, Docker, Windows app).
+
 ## Configuration
 
 Start from [config.example.yaml](config.example.yaml). Important sections:
 
-- `camera` — camera name, source mode, stream, and target FPS
+- `camera` — name, source mode (`webcam` / `local` / `direct_rtsp`), stream, FPS
 - `detection` — YOLO model, confidence, IoU, tracker, device, and image size
-- `counting_line` — direction, cooldown, travel, and jump protection
+- `counting_line` — direction, cooldown, travel/jump protection, and
+  `segment_margin_pixels` (count only between the endpoints)
 - `focus_area` — doorway crop and privacy mask
-- `tailgating` — detection mode, thresholds, evidence, clips, and alerts
+- `tailgating` — detection mode, thresholds, evidence, clip length
+  (`clip_pre_seconds` / `clip_post_seconds` / `clip_max_seconds`), and alert /
+  `telegram_cooldown_seconds` settings
 - `entry_capture` — ordinary-entry face capture and sampling
 - `door_zone` — optional restricted doorway polygon
 - `gate_zone` — movement detection settings

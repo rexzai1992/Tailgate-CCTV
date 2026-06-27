@@ -90,6 +90,26 @@ class CounterTests(unittest.TestCase):
         counter.update(3, (50, 43), now=0)
         self.assertIsNone(counter.update(3, (50, 57), now=1))
 
+    def test_crossing_beyond_the_marks_is_not_counted(self) -> None:
+        # Line segment spans x in [0, 200]. A crossing at x=350 is past the end
+        # mark (on the line's infinite extension) and must not count.
+        counter = LineZoneCounter((0, 100), (200, 100), deadband_pixels=2)
+        self.assertIsNone(counter.update(7, (350, 80), now=0))
+        self.assertIsNone(counter.update(7, (350, 120), now=2))
+
+    def test_crossing_between_the_marks_still_counts(self) -> None:
+        counter = LineZoneCounter((0, 100), (200, 100), deadband_pixels=2)
+        self.assertIsNone(counter.update(7, (100, 80), now=0))
+        self.assertIsNotNone(counter.update(7, (100, 120), now=2))
+
+    def test_segment_margin_extends_the_marks(self) -> None:
+        # With a 60px margin, a crossing just past the x=200 end mark counts.
+        counter = LineZoneCounter(
+            (0, 100), (200, 100), deadband_pixels=2, segment_margin_pixels=60
+        )
+        self.assertIsNone(counter.update(7, (240, 80), now=0))
+        self.assertIsNotNone(counter.update(7, (240, 120), now=2))
+
     def test_track_status_reports_calibration_state(self) -> None:
         counter = LineZoneCounter((0, 50), (100, 50))
         counter.update(9, (50, 75), now=0)

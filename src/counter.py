@@ -33,6 +33,7 @@ class LineZoneCounter:
         minimum_travel_pixels: float = 20,
         tracker_state_ttl_seconds: float = 30,
         max_jump_pixels: float = 0,
+        segment_margin_pixels: float = 0,
     ):
         if start == end:
             raise ValueError("Counting line needs two different points")
@@ -41,6 +42,10 @@ class LineZoneCounter:
         self.start = start
         self.end = end
         self.in_sign = 1 if in_side == "positive" else -1
+        # Only count crossings that fall between the two drawn endpoints (the
+        # marks), not along the infinite extension of the line. The margin (in
+        # pixels) optionally extends the segment a little past each endpoint.
+        self.segment_margin_pixels = float(segment_margin_pixels)
         self.deadband_pixels = float(deadband_pixels)
         self.crossing_cooldown_seconds = float(crossing_cooldown_seconds)
         self.same_direction_cooldown_seconds = float(
@@ -84,6 +89,11 @@ class LineZoneCounter:
         self._last_side[tracker_id] = current_side
         self._last_anchor[tracker_id] = anchor
         if previous_side is None or previous_side == current_side:
+            return None
+
+        # Only count when the crossing happens between the two endpoints. A pass
+        # beyond the ends of the drawn line (its infinite extension) is ignored.
+        if not self._within_segment(anchor):
             return None
 
         # A real walker moves a modest distance per frame. A huge jump means the
@@ -204,6 +214,18 @@ class LineZoneCounter:
                 >= self.same_direction_cooldown_seconds
             ):
                 self._direction_armed[key] = True
+
+    def _within_segment(self, anchor: Point) -> bool:
+        """True when the anchor projects onto the drawn segment (plus margin)."""
+        sx, sy = self.start
+        ex, ey = self.end
+        dx, dy = ex - sx, ey - sy
+        seg_len_sq = dx * dx + dy * dy
+        if seg_len_sq <= 0:
+            return True
+        t = ((anchor[0] - sx) * dx + (anchor[1] - sy) * dy) / seg_len_sq
+        margin = self.segment_margin_pixels / (seg_len_sq ** 0.5)
+        return -margin <= t <= 1 + margin
 
     def set_line(self, start: Point, end: Point) -> None:
         if start == end:

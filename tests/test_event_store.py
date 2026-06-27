@@ -89,6 +89,25 @@ class EventStoreTests(unittest.TestCase):
             self.assertEqual(store.query(limit=0)["limit"], 1)
             self.assertEqual(store.query(limit=10_000)["limit"], 500)
 
+    def test_date_range_filter(self) -> None:
+        with TemporaryDirectory() as tmp:
+            store = EventStore(Path(tmp) / "gym_sentry.db")
+            self.addCleanup(store.close)
+            for day in (19, 20, 21):
+                store.record_event(
+                    "security", "Main",
+                    datetime(2026, 6, day, 12, 0, 0, tzinfo=timezone.utc),
+                    event_type="TAILGATING_DETECTED",
+                )
+            self.assertEqual(store.query(start="2026-06-20")["total"], 2)
+            self.assertEqual(store.query(end="2026-06-20")["total"], 2)
+            self.assertEqual(
+                store.query(start="2026-06-20", end="2026-06-20")["total"], 1
+            )
+            self.assertEqual(
+                store.query(start="2026-06-19", end="2026-06-21")["total"], 3
+            )
+
     def test_clip_path_update(self) -> None:
         with TemporaryDirectory() as tmp:
             store = EventStore(Path(tmp) / "gym_sentry.db")

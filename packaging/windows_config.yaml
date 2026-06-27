@@ -1,13 +1,16 @@
+# Default configuration for the packaged Windows app.
+# Uses server-side "local" camera capture: the app opens the camera directly,
+# so the OS grants camera permission once and the browser never prompts.
 camera:
   name: Main Entrance
-  source: '0'
+  source: '0'            # camera number: 0 = default device, 1 = next, ...
   width: 1280
   height: 720
-  require_focus_area: true
+  require_focus_area: false
   browser_device_id: ''
   browser_device_label: ''
-  mode: browser
-  source_mode: webcam
+  mode: ip
+  source_mode: local
   rtsp_transport: tcp
   target_fps: 12.0
 detection:
@@ -56,11 +59,9 @@ tailgating:
   alert_cooldown_seconds: 5
   telegram_cooldown_seconds: 0   # 0 = send a Telegram photo for every tailgating event
   show_alert_on_screen: true
-  keyboard_test_key: a
   clip_fps: 10
 door_zone:
   enabled: false
-  interactive_setup: true
   points: []
 gate_zone:
   enabled: false

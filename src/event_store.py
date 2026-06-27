@@ -132,13 +132,27 @@ class EventStore:
         category: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        start: str | None = None,
+        end: str | None = None,
     ) -> dict[str, Any]:
         if category is not None and category not in CATEGORIES:
             raise ValueError(f"Unknown event category: {category}")
         limit = max(1, min(int(limit), 500))
         offset = max(0, int(offset))
-        where = "WHERE category = ?" if category else ""
-        params: list[Any] = [category] if category else []
+        clauses: list[str] = []
+        params: list[Any] = []
+        if category:
+            clauses.append("category = ?")
+            params.append(category)
+        # Inclusive date-range filter on the YYYY-MM-DD prefix of the timestamp,
+        # so timezone offsets in the stored ISO strings do not affect matching.
+        if start:
+            clauses.append("substr(timestamp, 1, 10) >= ?")
+            params.append(str(start)[:10])
+        if end:
+            clauses.append("substr(timestamp, 1, 10) <= ?")
+            params.append(str(end)[:10])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         with self._lock:
             total = int(
                 self._conn.execute(

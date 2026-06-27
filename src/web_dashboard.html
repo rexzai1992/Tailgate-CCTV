@@ -306,6 +306,14 @@
     .settings-group .group-hint { color: var(--muted); font-size: 12px; margin: 0; line-height: 1.45; }
     .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .settings-status { min-height: 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+    .chat-row {
+      display: flex; align-items: center; gap: 8px; margin-top: 6px;
+      padding: 6px 8px 6px 12px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--panel); font-size: 13px;
+    }
+    .chat-row .chat-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chat-row button { padding: 3px 9px; font-size: 12px; }
+    .chat-empty { color: var(--muted); font-size: 12px; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -390,20 +398,26 @@
         <label class="hint" for="cameraModeSelect">Source type</label>
         <select id="cameraModeSelect" style="width:100%; margin-top:6px;">
           <option value="webcam">Browser webcam</option>
+          <option value="local">Local camera (this device)</option>
           <option value="direct_rtsp">Direct IP / RTSP camera</option>
         </select>
+        <div id="localFields" style="display:none; margin-top:10px;">
+          <label class="hint" for="localIndex">Camera number</label>
+          <input id="localIndex" type="number" min="0" max="9" step="1" value="0" style="width:100%; margin-top:6px;">
+          <p class="hint">The app opens this camera directly, so the browser never asks for camera permission. Use 0 for the default camera, 1 for the next, and so on.</p>
+        </div>
         <div id="ipFields" style="display:none; margin-top:10px;">
           <label class="hint" for="cameraUrl">Stream URL (RTSP/HTTP)</label>
           <input id="cameraUrl" autocomplete="off" placeholder="rtsp://admin:pass@192.168.1.64:554/Streaming/Channels/102" style="width:100%; margin-top:6px;">
-          <div style="display:flex; gap:8px; margin-top:8px;">
-            <select id="rtspTransport" style="flex:1; min-width:0;">
-              <option value="tcp">TCP</option>
-              <option value="udp">UDP</option>
-            </select>
-            <input id="targetFps" type="number" min="1" max="30" value="12" title="Target FPS" style="width:84px;">
-          </div>
+          <label class="hint" for="rtspTransport" style="margin-top:8px;display:block;">RTSP transport</label>
+          <select id="rtspTransport" style="width:100%; margin-top:6px;">
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+          </select>
           <p class="hint" id="ipCamStatus"></p>
         </div>
+        <label class="hint" for="targetFps" style="margin-top:10px;display:block;">Processing FPS (1–30)</label>
+        <input id="targetFps" type="number" min="1" max="30" value="15" title="Processing FPS" style="width:100%; margin-top:6px;">
         <div class="stack" style="margin-top:10px;">
           <button class="primary" id="saveCamera">Save camera source</button>
         </div>
@@ -446,6 +460,23 @@
       <section class="panel">
         <h2>Recent security events</h2>
         <div class="events" id="events"><div class="empty">No security events yet.</div></div>
+      </section>
+
+      <section class="panel">
+        <h2>Event history <span id="historyCount" class="hint" style="font-weight:400;"></span></h2>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
+          <select id="historyCategory" style="flex:1; min-width:110px;">
+            <option value="security">Tailgating</option>
+            <option value="crossing">Crossings</option>
+            <option value="gate">Gate</option>
+            <option value="">All</option>
+          </select>
+          <input type="date" id="historyStart" title="From date" style="flex:1; min-width:120px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text);">
+          <input type="date" id="historyEnd" title="To date" style="flex:1; min-width:120px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text);">
+          <button id="applyHistoryFilter" class="blue">Apply</button>
+        </div>
+        <div class="events" id="historyEvents" style="max-height:520px;"><div class="empty">Loading…</div></div>
+        <button id="loadMoreEvents" style="width:100%;margin-top:8px;display:none;">Load more</button>
       </section>
 
       <section class="panel">
@@ -514,11 +545,16 @@
             <input id="telegramToken" autocomplete="off" placeholder="123456:ABC...">
           </div>
           <div class="field">
-            <label for="telegramChatId">Chat ID</label>
-            <input id="telegramChatId" autocomplete="off" placeholder="-1001234567890">
+            <label>Recipients (chats &amp; groups)</label>
+            <div id="chatIdList"></div>
+            <div class="find-row" style="margin-top:8px;">
+              <input id="newChatId" autocomplete="off" placeholder="Add a chat or group ID">
+              <button id="addChatId" class="blue">Add</button>
+            </div>
+            <button id="telegramDiscover" style="width:100%; margin-top:8px;">Find chats (after /start)</button>
+            <p class="group-hint">Add the bot to a group to alert everyone in it. Click <strong>Find chats</strong> to list everyone who messaged the bot, then add them. Each added recipient gets every alert.</p>
           </div>
           <div class="telegram-actions">
-            <button id="telegramDiscover">Find chat (after /start)</button>
             <button id="telegramTest">Send test</button>
             <button class="primary" id="telegramSave">Save Telegram settings</button>
           </div>
@@ -562,6 +598,8 @@
     let setupDirty = false;
     let sentFrames = 0;
     let processedFrames = 0;
+    let processFps = 15;  // fixed webcam processing rate, from camera.target_fps
+    let smoothedFps = 0;  // EMA of the measured rate for a stable on-screen value
     let lastRateAt = performance.now();
     let knownCameraIds = new Set();
     let preferredCameraDeviceId = localStorage.getItem("gymSentryCameraDeviceId") || "";
@@ -590,10 +628,45 @@
       node.style.color = error ? "var(--red)" : "var(--green)";
     }
 
+    let telegramChatIds = [];
+
+    function parseChatIds(raw) {
+      return (raw || "")
+        .split(/[,;\n]+/)
+        .map(value => value.trim())
+        .filter(Boolean);
+    }
+
+    function renderChatIds() {
+      const list = document.getElementById("chatIdList");
+      if (!list) return;
+      if (!telegramChatIds.length) {
+        list.innerHTML = '<div class="chat-empty">No recipients yet. Add an ID or use Find chats.</div>';
+        return;
+      }
+      list.innerHTML = telegramChatIds
+        .map((id, index) =>
+          `<div class="chat-row"><span class="chat-id">${id}</span>` +
+          `<button type="button" data-index="${index}">Remove</button></div>`
+        )
+        .join("");
+    }
+
+    function addChatId(id) {
+      const cleaned = String(id || "").trim();
+      if (cleaned && !telegramChatIds.includes(cleaned)) {
+        telegramChatIds.push(cleaned);
+        telegramFormTouched = true;
+        renderChatIds();
+        return true;
+      }
+      return false;
+    }
+
     function telegramPayload() {
       return {
         enabled: document.getElementById("telegramEnabled").checked,
-        chat_id: document.getElementById("telegramChatId").value.trim(),
+        chat_id: telegramChatIds.join(", "),
         bot_token: document.getElementById("telegramToken").value.trim() || null
       };
     }
@@ -624,7 +697,8 @@
           : "Not configured";
       if (!telegramFormTouched) {
         document.getElementById("telegramEnabled").checked = Boolean(telegram.enabled);
-        document.getElementById("telegramChatId").value = telegram.chat_id || "";
+        telegramChatIds = parseChatIds(telegram.chat_id);
+        renderChatIds();
         document.getElementById("telegramToken").placeholder = telegram.token_saved
           ? "Token saved — leave blank to keep it"
           : "123456:ABC...";
@@ -779,9 +853,10 @@
 
     let cameraFormInit = false;
     function showSourceFields(sourceMode) {
-      const serverOwned = sourceMode !== "webcam";
       document.getElementById("ipFields").style.display =
-        serverOwned ? "block" : "none";
+        sourceMode === "direct_rtsp" ? "block" : "none";
+      document.getElementById("localFields").style.display =
+        sourceMode === "local" ? "block" : "none";
     }
 
     function applyCameraMode(status) {
@@ -789,6 +864,8 @@
       const sourceMode = status.source_mode ||
         (mode === "ip" ? "direct_rtsp" : "webcam");
       cameraMode = mode;
+      // Keep the fixed processing rate in sync with the configured target FPS.
+      processFps = Math.min(30, Math.max(1, Number(status.target_fps) || 15));
       // Populate the settings form once, then keep the live IP status fresh.
       if (!cameraFormInit) {
         const modeSel = document.getElementById("cameraModeSelect");
@@ -797,8 +874,12 @@
           const url = status.camera_source && status.camera_source !== "0"
             ? status.camera_source : "";
           document.getElementById("cameraUrl").value = url;
+          if (sourceMode === "local") {
+            document.getElementById("localIndex").value =
+              status.camera_source || "0";
+          }
           document.getElementById("rtspTransport").value = status.rtsp_transport || "tcp";
-          document.getElementById("targetFps").value = status.target_fps || 12;
+          document.getElementById("targetFps").value = processFps;
           showSourceFields(sourceMode);
           cameraFormInit = true;
         }
@@ -887,6 +968,7 @@
       updateSearchStatus(status.search || {});
       updateTelegramStatus(status.telegram || {});
       renderEvents(status.recent_events || []);
+      maybeRefreshHistory(status.recent_events || []);
       renderEntries(status.recent_entries || []);
       renderGateEvents(status.recent_gate_events || []);
     }
@@ -1023,6 +1105,36 @@
         : "";
     }
 
+    function eventCardHtml(event, opts = {}) {
+      const images = [
+        thumb(event.snapshot_url, "Snapshot"),
+        thumb(event.face_url, "Face"),
+        thumb(event.body_url, "Body")
+      ].join("");
+      const clip = event.clip_url
+        ? `<video class="clip" src="${event.clip_url}" controls preload="metadata" playsinline onerror="setTimeout(() => this.load(), 2500)"></video>`
+        : event.clip_pending
+          ? '<div class="delivery">Recording event video…</div>'
+          : "";
+      const delivery = event.telegram_photo_sent || event.telegram_video_sent
+        ? `<div class="delivery">Telegram: ${event.telegram_photo_sent ? "image sent" : "image pending"} · ${event.telegram_video_sent ? "video sent" : "video pending"}</div>`
+        : "";
+      const media = (images || clip) ? `<div class="media">${images}</div>${clip}` : "";
+      const stamp = new Date(event.timestamp);
+      const when = opts.fullDate
+        ? (isNaN(stamp) ? event.timestamp : stamp.toLocaleString())
+        : (isNaN(stamp) ? event.timestamp : stamp.toLocaleTimeString());
+      return `<div class="event">
+          <div class="event-top">
+            <span class="event-type">${event.event_type}</span>
+            <span class="event-time">${when}</span>
+          </div>
+          <div class="event-bottom">Tracker ${event.tracker_id} · ${event.reason}</div>
+          ${media}
+          ${delivery}
+        </div>`;
+    }
+
     function renderEvents(events) {
       const root = document.getElementById("events");
       const sig = JSON.stringify(events);
@@ -1032,31 +1144,64 @@
         root.innerHTML = '<div class="empty">No security events yet.</div>';
         return;
       }
-      root.innerHTML = events.map(event => {
-        const images = [
-          thumb(event.snapshot_url, "Snapshot"),
-          thumb(event.face_url, "Face"),
-          thumb(event.body_url, "Body")
-        ].join("");
-        const clip = event.clip_url
-          ? `<video class="clip" src="${event.clip_url}" controls preload="metadata" playsinline onerror="setTimeout(() => this.load(), 2500)"></video>`
-          : event.clip_pending
-            ? '<div class="delivery">Recording event video…</div>'
-            : "";
-        const delivery = event.telegram_photo_sent || event.telegram_video_sent
-          ? `<div class="delivery">Telegram: ${event.telegram_photo_sent ? "image sent" : "image pending"} · ${event.telegram_video_sent ? "video sent" : "video pending"}</div>`
-          : "";
-        const media = (images || clip) ? `<div class="media">${images}</div>${clip}` : "";
-        return `<div class="event">
-          <div class="event-top">
-            <span class="event-type">${event.event_type}</span>
-            <span class="event-time">${new Date(event.timestamp).toLocaleTimeString()}</span>
-          </div>
-          <div class="event-bottom">Tracker ${event.tracker_id} · ${event.reason}</div>
-          ${media}
-          ${delivery}
-        </div>`;
-      }).join("");
+      root.innerHTML = events.map(event => eventCardHtml(event)).join("");
+    }
+
+    let historyOffset = 0;
+    let historyTotal = 0;
+    let lastHistoryTopTs = null;
+    let historyLoaded = false;
+    const HISTORY_PAGE = 20;
+
+    async function loadEventHistory(reset = false) {
+      const root = document.getElementById("historyEvents");
+      if (!root) return;
+      if (reset) {
+        historyOffset = 0;
+        root.innerHTML = '<div class="empty">Loading…</div>';
+      }
+      try {
+        const params = new URLSearchParams();
+        const category = document.getElementById("historyCategory").value;
+        const start = document.getElementById("historyStart").value;
+        const end = document.getElementById("historyEnd").value;
+        if (category) params.set("category", category);
+        if (start) params.set("start", start);
+        if (end) params.set("end", end);
+        params.set("limit", HISTORY_PAGE);
+        params.set("offset", historyOffset);
+        const data = await api(`/events?${params.toString()}`);
+        historyTotal = data.total || 0;
+        if (reset) root.innerHTML = "";
+        if (!data.items.length && historyOffset === 0) {
+          root.innerHTML = '<div class="empty">No tailgating events recorded yet.</div>';
+        } else {
+          root.insertAdjacentHTML(
+            "beforeend",
+            data.items.map(event => eventCardHtml(event, {fullDate: true})).join("")
+          );
+        }
+        historyOffset += data.items.length;
+        const more = document.getElementById("loadMoreEvents");
+        if (more) more.style.display = historyOffset < historyTotal ? "block" : "none";
+        const count = document.getElementById("historyCount");
+        if (count) count.textContent = historyTotal ? `${historyTotal} total` : "";
+      } catch (error) {
+        if (reset) {
+          root.innerHTML = `<div class="empty">Could not load history: ${error.message}</div>`;
+        }
+      }
+    }
+
+    function maybeRefreshHistory(events) {
+      // Load once on startup, then reload the first page whenever a new
+      // security event appears.
+      const topTs = events.length ? events[0].timestamp : null;
+      if (!historyLoaded || topTs !== lastHistoryTopTs) {
+        historyLoaded = true;
+        lastHistoryTopTs = topTs;
+        loadEventHistory(true);
+      }
     }
 
     async function refreshStatus() {
@@ -1278,15 +1423,27 @@
     }
 
     async function runAiAtTargetRate() {
-      const frameIntervalMs = 1000 / 15;
+      // Hard FPS lock: frames are scheduled on a wall clock so the rate is a
+      // strict ceiling. If a frame runs long we resync to "now" instead of
+      // bursting to catch up, so the processing rate can never exceed processFps.
+      let nextAt = performance.now();
       while (true) {
-        const startedAt = performance.now();
+        const frameIntervalMs = 1000 / processFps;
+        nextAt += frameIntervalMs;
         const processed = await sendFrame();
-        const elapsed = performance.now() - startedAt;
-        const delay = processed
-          ? Math.max(0, frameIntervalMs - elapsed)
-          : 50;
-        await new Promise(resolve => setTimeout(resolve, delay));
+        const now = performance.now();
+        if (!processed) {
+          // Camera not ready / no frame: back off without advancing the clock.
+          nextAt = now + 50;
+          await new Promise(resolve => setTimeout(resolve, 50));
+          continue;
+        }
+        if (now < nextAt) {
+          await new Promise(resolve => setTimeout(resolve, nextAt - now));
+        } else {
+          // Behind schedule — do not catch up, just realign the cadence.
+          nextAt = now;
+        }
       }
     }
 
@@ -1744,6 +1901,12 @@
         setMessage("Enter the IP camera stream URL.", true);
         return;
       }
+      let source = "0";
+      if (sourceMode === "direct_rtsp") {
+        source = url;
+      } else if (sourceMode === "local") {
+        source = String(document.getElementById("localIndex").value || "0");
+      }
       const button = document.getElementById("saveCamera");
       button.disabled = true;
       button.textContent = "Saving…";
@@ -1753,7 +1916,7 @@
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({
             source_mode: sourceMode,
-            source: sourceMode === "direct_rtsp" ? url : "0",
+            source: source,
             rtsp_transport: document.getElementById("rtspTransport").value,
             target_fps: Number(document.getElementById("targetFps").value) || 12
           })
@@ -1773,13 +1936,33 @@
       } catch (error) { setMessage(error.message, true); }
     });
     if (document.getElementById("telegramSave")) {
-      ["telegramToken", "telegramChatId", "telegramEnabled"].forEach(id => {
+      ["telegramToken", "telegramEnabled"].forEach(id => {
         document.getElementById(id).addEventListener("input", () => {
           telegramFormTouched = true;
         });
         document.getElementById(id).addEventListener("change", () => {
           telegramFormTouched = true;
         });
+      });
+      // Add a manually typed recipient.
+      const addChatFromInput = () => {
+        const input = document.getElementById("newChatId");
+        if (addChatId(input.value)) {
+          input.value = "";
+          setTelegramMessage("Recipient added. Click Save to keep it.");
+        }
+      };
+      document.getElementById("addChatId").addEventListener("click", addChatFromInput);
+      document.getElementById("newChatId").addEventListener("keydown", event => {
+        if (event.key === "Enter") { event.preventDefault(); addChatFromInput(); }
+      });
+      // Remove a recipient row.
+      document.getElementById("chatIdList").addEventListener("click", event => {
+        const button = event.target.closest("button[data-index]");
+        if (!button) return;
+        telegramChatIds.splice(Number(button.dataset.index), 1);
+        telegramFormTouched = true;
+        renderChatIds();
       });
       document.getElementById("telegramSave").addEventListener("click", async () => {
         try {
@@ -1790,19 +1973,24 @@
       });
       document.getElementById("telegramDiscover").addEventListener("click", async () => {
         try {
-          setTelegramMessage("Looking for a chat that sent /start…");
-          const status = await api("/telegram/discover-chat", {
+          setTelegramMessage("Looking for chats that messaged the bot…");
+          const result = await api("/telegram/discover-chats", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
               bot_token: document.getElementById("telegramToken").value.trim() || null
             })
           });
-          document.getElementById("telegramChatId").value = status.chat_id || "";
           document.getElementById("telegramToken").value = "";
           document.getElementById("telegramEnabled").checked = true;
           telegramFormTouched = true;
-          setTelegramMessage(`Found ${status.chat_title || "Telegram chat"}: ${status.chat_id}`);
+          const chats = result.chats || [];
+          let added = 0;
+          chats.forEach(chat => { if (addChatId(chat.chat_id)) added += 1; });
+          const names = chats.map(chat => chat.chat_title).join(", ");
+          setTelegramMessage(
+            `Found ${chats.length} chat(s): ${names}. Added ${added} new — click Save to keep them.`
+          );
         } catch (error) {
           setTelegramMessage(error.message, true);
         }
@@ -1826,6 +2014,9 @@
       tools.toggleAttribute("hidden", !open);
       event.currentTarget.setAttribute("aria-expanded", String(open));
     });
+    document.getElementById("loadMoreEvents").addEventListener("click", () => loadEventHistory(false));
+    document.getElementById("applyHistoryFilter").addEventListener("click", () => loadEventHistory(true));
+    document.getElementById("historyCategory").addEventListener("change", () => loadEventHistory(true));
     document.getElementById("openSettings").addEventListener("click", openSettings);
     document.getElementById("closeSettings").addEventListener("click", closeSettings);
     document.getElementById("settingsOverlay").addEventListener("click", (event) => {
@@ -1843,15 +2034,18 @@
       const now = performance.now();
       const seconds = (now - lastRateAt) / 1000;
       const rate = processedFrames / Math.max(.1, seconds);
+      // Smooth the reading (exponential moving average) so it shows a stable
+      // number instead of jittering frame to frame.
+      smoothedFps = smoothedFps ? smoothedFps * 0.7 + rate * 0.3 : rate;
       document.getElementById("processingStatus").textContent = cameraRunning
         ? latest?.detection_paused_reason
           ? "AI paused until doorway focus is set"
-          : `AI processing ${rate.toFixed(1)} FPS · max 15`
+          : `AI processing ${smoothedFps.toFixed(1)} FPS · locked ${processFps}`
         : "Waiting for camera";
       processedFrames = 0;
       sentFrames = 0;
       lastRateAt = now;
-    }, 2000);
+    }, 1000);
 
     renderOverlay();
     (async () => {

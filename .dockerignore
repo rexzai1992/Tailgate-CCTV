@@ -25,3 +25,7 @@ data/
 # Tests and documentation are not needed in the runtime image
 tests/
 *.md
+
+# Windows packaging artifacts
+build/
+dist/

@@ -187,7 +187,9 @@ class WebCameraProcessor:
         )
         self.camera_source = camera_config.get("source", 0)
         self.rtsp_transport = str(camera_config.get("rtsp_transport", "tcp"))
-        self.target_fps = float(camera_config.get("target_fps", 12))
+        self.target_fps = max(
+            1.0, min(30.0, float(camera_config.get("target_fps", 12) or 12))
+        )
         self.ip_stream: IpCameraStream | None = None
         self.detection_config = detection_config
         self.line_config = config.get("counting_line", {})
@@ -286,8 +288,17 @@ class WebCameraProcessor:
                 tailgating_config.get("save_event_clip", False)
             ),
             clip_fps=float(tailgating_config.get("clip_fps", 10)),
-            pre_seconds=float(tailgating_config.get("clip_pre_seconds", 2)),
-            post_seconds=float(tailgating_config.get("clip_post_seconds", 3)),
+            pre_seconds=float(tailgating_config.get("clip_pre_seconds", 4)),
+            post_seconds=float(tailgating_config.get("clip_post_seconds", 6)),
+            # clip_post_seconds is how long recording continues after the suspect
+            # leaves frame (the real post-roll knob). Recording also continues the
+            # whole time they remain visible, up to clip_max_seconds.
+            exit_grace_seconds=float(
+                tailgating_config.get("clip_post_seconds", 6)
+            ),
+            max_clip_seconds=float(
+                tailgating_config.get("clip_max_seconds", 30)
+            ),
             capture_entry_face=bool(
                 entry_capture_config.get("capture_face", True)
             ),
@@ -305,6 +316,9 @@ class WebCameraProcessor:
         # Maps a pending clip path to the persisted event row id so the DB
         # record can be updated once the clip finishes encoding.
         self.pending_clip_db_ids: dict[str, int] = {}
+        # Last time a Telegram photo alert was sent (monotonic). Used by the
+        # optional telegram_cooldown_seconds throttle (default 0 = every event).
+        self._last_telegram_at = 0.0
         self.event_store = EventStore(
             logging_config.get("event_db", "data/gym_sentry.db")
         )
@@ -617,10 +631,16 @@ class WebCameraProcessor:
         category: str | None,
         limit: int,
         offset: int,
+        start: str | None = None,
+        end: str | None = None,
     ) -> dict[str, object]:
         try:
             result = self.event_store.query(
-                category=category, limit=limit, offset=offset
+                category=category,
+                limit=limit,
+                offset=offset,
+                start=start,
+                end=end,
             )
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
@@ -739,9 +759,9 @@ class WebCameraProcessor:
         target_fps: float,
     ) -> dict[str, object]:
         cleaned_mode = (source_mode or "webcam").lower()
-        if cleaned_mode not in {"webcam", "direct_rtsp"}:
+        if cleaned_mode not in {"webcam", "direct_rtsp", "local"}:
             raise ValueError(
-                "source_mode must be webcam or direct_rtsp"
+                "source_mode must be webcam, local, or direct_rtsp"
             )
         with self.lock:
             self.source_mode = cleaned_mode
@@ -749,9 +769,14 @@ class WebCameraProcessor:
                 "browser" if cleaned_mode == "webcam" else "ip"
             )
             cleaned = str(source).strip()
-            self.camera_source = cleaned if cleaned else 0
+            # In "local" mode the app captures a physical device server-side, so
+            # the source is a camera index (default 0) rather than a stream URL.
+            if cleaned_mode == "local":
+                self.camera_source = cleaned if cleaned.isdigit() else "0"
+            else:
+                self.camera_source = cleaned if cleaned else 0
             self.rtsp_transport = (rtsp_transport or "tcp").strip() or "tcp"
-            self.target_fps = max(1.0, float(target_fps or 12))
+            self.target_fps = max(1.0, min(30.0, float(target_fps or 12)))
             camera = self.config.setdefault("camera", {})
             camera["mode"] = self.camera_mode
             camera["source_mode"] = self.source_mode
@@ -862,6 +887,11 @@ class WebCameraProcessor:
     ) -> dict[str, object]:
         return self.telegram.discover_chat(payload.bot_token)
 
+    def discover_telegram_chats(
+        self, payload: TelegramDiscoverPayload
+    ) -> dict[str, object]:
+        return self.telegram.discover_chats(payload.bot_token)
+
     def test_telegram(self) -> dict[str, object]:
         return self.telegram.test()
 
@@ -900,6 +930,9 @@ class WebCameraProcessor:
                 self.line_config.get("max_jump_percent", 0.5)
             )
             * height,
+            segment_margin_pixels=float(
+                self.line_config.get("segment_margin_pixels", 0)
+            ),
         )
         self.frame_size = (width, height)
 
@@ -1145,16 +1178,14 @@ class WebCameraProcessor:
             normalized_clip = str(Path(clip_path))
             self.pending_clip_events[normalized_clip] = event
             self.pending_clip_db_ids[normalized_clip] = event_id
-        # Send only one Telegram alert per incident: show_alert honours
-        # alert_cooldown_seconds, so a burst of people produces a single message
-        # instead of one per person.
-        if result.show_alert:
-            caption = self._telegram_event_caption(result, wall_now)
-            if clip_path:
-                self.pending_clip_notifications[str(Path(clip_path))] = {
-                    "event": event,
-                    "caption": caption,
-                }
+        caption = self._telegram_event_caption(result, wall_now)
+        # Send a captioned photo alert for EVERY tailgating event. An optional
+        # telegram_cooldown_seconds (default 0) can throttle floods if needed.
+        telegram_cooldown = float(
+            self.tailgating_config.get("telegram_cooldown_seconds", 0)
+        )
+        if monotonic_now - self._last_telegram_at >= telegram_cooldown:
+            self._last_telegram_at = monotonic_now
             self.notification_executor.submit(
                 self._send_telegram_photo,
                 event,
@@ -1162,6 +1193,13 @@ class WebCameraProcessor:
                 face_path,
                 caption,
             )
+        # Send one captioned clip video per incident (show_alert honours
+        # alert_cooldown_seconds) to avoid uploading a video per person.
+        if result.show_alert and clip_path:
+            self.pending_clip_notifications[str(Path(clip_path))] = {
+                "event": event,
+                "caption": caption,
+            }
         if result.show_alert and bool(
             self.tailgating_config.get("show_alert_on_screen", True)
         ):
@@ -1398,12 +1436,10 @@ class WebCameraProcessor:
         caption: str,
     ) -> None:
         sent = self.telegram.send_alert(snapshot_path, caption)
-        # Always report the face: send the close-up when captured, otherwise a
-        # short note so it's clear no usable face was seen for this event.
+        # Send the face close-up when one was captured; skip a message otherwise
+        # so rapid events do not spam a "no face" note.
         if face_path:
             self.telegram.send_alert(face_path, "👤 Face close-up")
-        else:
-            self.telegram.send_alert("", "👤 No face captured for this event.")
         with self.lock:
             event["telegram_photo_sent"] = sent
 
@@ -1413,9 +1449,9 @@ class WebCameraProcessor:
         clip_path: str,
         caption: str,
     ) -> None:
-        # Caption is already sent once with the photo alert; the follow-up video
-        # goes out without a caption so the details are not duplicated.
-        sent = self.telegram.send_video(clip_path, "")
+        # The clip carries the full event caption so it is self-explanatory even
+        # if viewed on its own.
+        sent = self.telegram.send_video(clip_path, caption)
         with self.lock:
             event["telegram_video_sent"] = sent
 
@@ -1593,18 +1629,25 @@ def create_web_app(
         category: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        start: str | None = None,
+        end: str | None = None,
     ) -> dict[str, object]:
         """Persistent crossing, security, and gate events (newest first).
 
         - `category`: `security`, `crossing`, or `gate` (omit for all)
         - `limit`: page size, 1–500 (default 50)
         - `offset`: records to skip (default 0)
+        - `start` / `end`: inclusive `YYYY-MM-DD` date range filter
 
         Returns `{items, total, limit, offset}`. Each item carries local
         evidence URLs where available. Survives restarts and counter resets."""
         try:
             return processor.query_events(
-                category=category, limit=limit, offset=offset
+                category=category,
+                limit=limit,
+                offset=offset,
+                start=start,
+                end=end,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1738,6 +1781,16 @@ def create_web_app(
         """Find the chat ID of a conversation that recently sent `/start`."""
         try:
             return processor.discover_telegram_chat(payload)
+        except TelegramError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/telegram/discover-chats", tags=["Telegram"], summary="Discover all Telegram chats")
+    def telegram_discover_chats(
+        payload: TelegramDiscoverPayload,
+    ) -> dict[str, object]:
+        """List every distinct chat/group that recently messaged the bot."""
+        try:
+            return processor.discover_telegram_chats(payload)
         except TelegramError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

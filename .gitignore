@@ -18,3 +18,7 @@ data/
 
 # Ultralytics model downloads
 *.pt
+
+# PyInstaller build output
+build/
+dist/

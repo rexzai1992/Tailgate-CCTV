@@ -38,8 +38,10 @@ class FakeProcessor:
     def status(self) -> dict[str, object]:
         return {"ok": True, "detection_mode": "entry_burst", "event_totals": self.event_store.totals()}
 
-    def query_events(self, category, limit, offset):
-        result = self.event_store.query(category=category, limit=limit, offset=offset)
+    def query_events(self, category, limit, offset, start=None, end=None):
+        result = self.event_store.query(
+            category=category, limit=limit, offset=offset, start=start, end=end
+        )
         return {
             **result,
             "items": [WebCameraProcessor._event_with_urls(row) for row in result["items"]],
