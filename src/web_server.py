@@ -99,6 +99,15 @@ class TailgatingSettingsPayload(BaseModel):
 def load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Configuration not found: {path}")
+    if path.is_dir():
+        raise IsADirectoryError(
+            f"Expected a YAML file but found a directory at '{path}'. "
+            "This usually means Docker created the volume mount-point as a directory "
+            "because the image did not contain the file. "
+            "Ensure your docker-compose.yml volume './config.yaml:/app/config.yaml' "
+            "points to an existing file on the host, and rebuild the image so the "
+            "Dockerfile pre-creates /app/config.yaml with 'RUN touch /app/config.yaml'."
+        )
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
 
