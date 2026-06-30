@@ -1,3 +1,4 @@
+import errno
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,30 @@ class TailgatingSettingsTests(unittest.TestCase):
             self.assertEqual(saved["tailgating"]["detection_mode"], "access_token")
             self.assertEqual(saved["tailgating"]["minimum_people"], 4)
             self.assertEqual(saved["tailgating"]["max_people_per_token"], 3)
+
+    def test_config_save_falls_back_when_replace_target_is_busy(self) -> None:
+        with TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            processor = self._make_processor(tmp)
+            with patch(
+                "src.web_server.os.replace",
+                side_effect=OSError(errno.EBUSY, "Device or resource busy"),
+            ):
+                processor.update_tailgating_settings(
+                    TailgatingSettingsPayload(
+                        enabled=True,
+                        detection_mode="access_token",
+                        minimum_people=3,
+                        tailgating_time_window_seconds=7,
+                        token_valid_seconds=9,
+                        max_people_per_token=2,
+                    )
+                )
+
+            with (tmp / "config.yaml").open(encoding="utf-8") as handle:
+                saved = yaml.safe_load(handle)
+            self.assertEqual(saved["tailgating"]["detection_mode"], "access_token")
+            self.assertEqual(saved["tailgating"]["minimum_people"], 3)
 
     def test_invalid_mode_is_rejected(self) -> None:
         with TemporaryDirectory() as tmp_name:

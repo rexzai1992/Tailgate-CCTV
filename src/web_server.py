@@ -4,6 +4,7 @@ import asyncio
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+import errno
 import os
 from pathlib import Path
 import tempfile
@@ -94,6 +95,7 @@ class TailgatingSettingsPayload(BaseModel):
     tailgating_time_window_seconds: float = Field(default=4, gt=0, le=60)
     token_valid_seconds: float = Field(default=6, gt=0, le=120)
     max_people_per_token: int = Field(default=1, ge=1, le=10)
+    inference_device: str = "auto"
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -101,12 +103,7 @@ def load_config(path: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"Configuration not found: {path}")
     if path.is_dir():
         raise IsADirectoryError(
-            f"Expected a YAML file but found a directory at '{path}'. "
-            "This usually means Docker created the volume mount-point as a directory "
-            "because the image did not contain the file. "
-            "Ensure your docker-compose.yml volume './config.yaml:/app/config.yaml' "
-            "points to an existing file on the host, and rebuild the image so the "
-            "Dockerfile pre-creates /app/config.yaml with 'RUN touch /app/config.yaml'."
+            f"Configuration path is a directory, not a YAML file: {path}"
         )
     with path.open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle) or {}
@@ -336,16 +333,13 @@ class WebCameraProcessor:
         self.search_spec: SearchSpec = inactive_search()
         self.search_matches: list[dict[str, object]] = []
         self.search_last_checked_at: str | None = None
-        # Optional inference tuning: device ("cpu"/"mps"/"cuda"/0) and imgsz.
-        configured_device = detection_config.get("device")
-        if configured_device not in (None, ""):
-            self.inference_device = configured_device
-        elif torch.cuda.is_available():
-            self.inference_device = 0
-        elif torch.backends.mps.is_available():
-            self.inference_device = "mps"
-        else:
-            self.inference_device = None
+        # Optional inference tuning. "auto" prefers CUDA, then MPS, then CPU.
+        self.inference_device_setting = str(
+            detection_config.get("device", "auto") or "auto"
+        )
+        self.inference_device = self._resolve_inference_device(
+            self.inference_device_setting
+        )
         self.inference_imgsz = detection_config.get("imgsz") or None
         # Face detection (Haar) is costly; only run it every Nth processed frame.
         self.face_sample_every = max(
@@ -681,11 +675,14 @@ class WebCameraProcessor:
                 "detection_mode must be entry_burst or access_token"
             )
         window = float(payload.tailgating_time_window_seconds)
+        device_setting = (payload.inference_device or "auto").strip().lower()
+        resolved_device = self._resolve_inference_device(device_setting)
         with self.lock:
             mode_changed = mode != self.detection_mode
             self.detection_mode = mode
             self.minimum_people = int(payload.minimum_people)
             tailgating = self.config.setdefault("tailgating", {})
+            detection = self.config.setdefault("detection", {})
             tailgating["enabled"] = bool(payload.enabled)
             tailgating["detection_mode"] = mode
             tailgating["minimum_people"] = self.minimum_people
@@ -693,6 +690,10 @@ class WebCameraProcessor:
             tailgating["token_valid_seconds"] = float(payload.token_valid_seconds)
             tailgating["max_people_per_token"] = int(payload.max_people_per_token)
             self.tailgating_config = tailgating
+            detection["device"] = device_setting
+            self.detection_config = detection
+            self.inference_device_setting = device_setting
+            self.inference_device = resolved_device
 
             alert_cooldown = float(tailgating.get("alert_cooldown_seconds", 5))
             self.detector.enabled = bool(payload.enabled)
@@ -723,7 +724,12 @@ class WebCameraProcessor:
             return self._status_locked(datetime.now().astimezone())
 
     def _save_config_locked(self) -> None:
-        """Atomically persist the in-memory config to ``config_path``."""
+        """Persist the in-memory config to ``config_path``.
+
+        Normal files are replaced atomically. Docker single-file bind mounts can
+        reject ``os.replace`` with EBUSY because the destination is the mount
+        point, so those fall back to rewriting the mounted file in place.
+        """
         directory = self.config_path.parent
         directory.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(
@@ -737,11 +743,21 @@ class WebCameraProcessor:
         try:
             with handle:
                 yaml.safe_dump(self.config, handle, sort_keys=False)
-            os.replace(temp_path, self.config_path)
+            try:
+                os.replace(temp_path, self.config_path)
+            except OSError as exc:
+                if exc.errno not in {errno.EBUSY, errno.EXDEV, errno.EPERM}:
+                    raise
+                with self.config_path.open("w", encoding="utf-8") as target:
+                    yaml.safe_dump(self.config, target, sort_keys=False)
+                    target.flush()
+                    os.fsync(target.fileno())
         except BaseException:
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
             raise
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
     def start_camera_stream(self) -> None:
         """(Re)start the server-side capture thread to match the current mode."""
@@ -830,6 +846,58 @@ class WebCameraProcessor:
             reset = getattr(tracker, "reset", None)
             if callable(reset):
                 reset()
+
+    @staticmethod
+    def _mps_available() -> bool:
+        mps = getattr(getattr(torch, "backends", None), "mps", None)
+        is_available = getattr(mps, "is_available", None)
+        return bool(is_available and is_available())
+
+    @classmethod
+    def _available_inference_devices(cls) -> dict[str, object]:
+        cuda_available = torch.cuda.is_available()
+        cuda_count = torch.cuda.device_count() if cuda_available else 0
+        return {
+            "cpu": True,
+            "cuda": cuda_available,
+            "cuda_device_count": cuda_count,
+            "mps": cls._mps_available(),
+        }
+
+    @classmethod
+    def _resolve_inference_device(cls, setting: object) -> str | int | None:
+        value = str(setting or "auto").strip().lower()
+        cuda_available = torch.cuda.is_available()
+        cuda_count = torch.cuda.device_count() if cuda_available else 0
+        if value in {"auto", ""}:
+            if cuda_available:
+                return 0
+            if cls._mps_available():
+                return "mps"
+            return None
+        if value in {"cpu", "cpu_only"}:
+            return "cpu"
+        if value in {"gpu", "gpu_only", "cuda"}:
+            if not cuda_available:
+                raise ValueError("GPU-only detection requires CUDA to be available")
+            return 0
+        if value in {"multi_gpu", "gpu_gpu", "gpu_and_gpu", "cuda_multi"}:
+            if cuda_count < 2:
+                raise ValueError("Multi-GPU detection requires at least two CUDA GPUs")
+            return ",".join(str(index) for index in range(cuda_count))
+        if value.isdigit():
+            index = int(value)
+            if not cuda_available or index >= cuda_count:
+                raise ValueError(f"CUDA GPU {index} is not available")
+            return index
+        if "," in value and all(part.strip().isdigit() for part in value.split(",")):
+            indexes = [int(part.strip()) for part in value.split(",")]
+            if not cuda_available or any(index >= cuda_count for index in indexes):
+                raise ValueError(f"CUDA GPUs {value} are not available")
+            return ",".join(str(index) for index in indexes)
+        raise ValueError(
+            "inference_device must be auto, cpu, gpu, multi_gpu, or CUDA indexes"
+        )
 
     def update_setup(self, payload: SetupPayload) -> dict[str, object]:
         focus_points = self._validated_focus(payload.focus_points)
@@ -1278,6 +1346,8 @@ class WebCameraProcessor:
                 if self.inference_device is not None
                 else "cpu"
             ),
+            "inference_device_setting": self.inference_device_setting,
+            "available_inference_devices": self._available_inference_devices(),
             "ip_camera": (
                 self.ip_stream.status() if self.ip_stream is not None else None
             ),

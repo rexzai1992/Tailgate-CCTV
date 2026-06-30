@@ -6,6 +6,7 @@ services:
     image: cctv-tailgate
     container_name: cctv-tailgate
     restart: unless-stopped
+    gpus: all
     # Reachable only from the host by default. Do not change to 0.0.0.0 unless
     # the service sits behind a VPN or an authenticated reverse proxy.
     ports:
@@ -14,8 +15,16 @@ services:
       - .env
     volumes:
       # Configuration and secrets (kept out of the image).
-      - ./config.yaml:/app/config.yaml
-      - ./.env:/app/.env
+      - type: bind
+        source: ./config.yaml
+        target: /app/config.yaml
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./.env
+        target: /app/.env
+        bind:
+          create_host_path: false
       - ./secrets:/app/secrets
       # Persistent runtime output.
       - ./captures:/app/captures

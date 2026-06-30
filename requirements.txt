@@ -1,9 +1,12 @@
 fastapi>=0.115
 lap>=0.5.12
 numpy>=2.0
-opencv-python-headless>=4.10
+opencv-python>=4.10
 PyYAML>=6.0
 python-dotenv>=1.0
 requests>=2.32
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
 ultralytics>=8.3
 uvicorn>=0.34

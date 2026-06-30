@@ -12,6 +12,7 @@ camera:
   target_fps: 12.0
 detection:
   model: yolo11n.pt
+  device: auto
   confidence: 0.35
   iou: 0.5
   tracker: bytetrack.yaml

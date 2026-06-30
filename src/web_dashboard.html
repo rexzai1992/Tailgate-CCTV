@@ -510,6 +510,16 @@
               <option value="access_token">Access token — external authorization required</option>
             </select>
           </div>
+          <div class="field">
+            <label for="inferenceDevice">Detection load</label>
+            <select id="inferenceDevice" style="width:100%; max-width:none;">
+              <option value="auto">Auto - prefer GPU, fallback to CPU</option>
+              <option value="cpu">CPU only</option>
+              <option value="gpu">GPU only</option>
+              <option value="multi_gpu">Multi-GPU</option>
+            </select>
+            <p class="group-hint" id="inferenceDeviceStatus"></p>
+          </div>
           <div class="field-grid">
             <div class="field" id="tgMinPeopleField">
               <label for="tgMinPeople">Minimum people (2–10)</label>
@@ -725,6 +735,18 @@
       const t = status.tailgating_settings || {};
       document.getElementById("tgEnabled").checked = t.enabled !== false;
       document.getElementById("tgMode").value = t.detection_mode || "entry_burst";
+      const deviceSelect = document.getElementById("inferenceDevice");
+      const deviceStatus = document.getElementById("inferenceDeviceStatus");
+      if (deviceSelect) {
+        deviceSelect.value = status.inference_device_setting || "auto";
+      }
+      if (deviceStatus) {
+        const devices = status.available_inference_devices || {};
+        const gpuCount = Number(devices.cuda_device_count || 0);
+        const active = status.inference_device || "cpu";
+        deviceStatus.textContent =
+          `Active: ${active}. CUDA GPUs: ${gpuCount}. CPU available.`;
+      }
       document.getElementById("tgMinPeople").value = t.minimum_people ?? 2;
       document.getElementById("tgWindow").value = t.tailgating_time_window_seconds ?? 4;
       document.getElementById("tgTokenValid").value = t.token_valid_seconds ?? 6;
@@ -758,7 +780,9 @@
         token_valid_seconds:
           Number(document.getElementById("tgTokenValid").value) || 6,
         max_people_per_token:
-          Number(document.getElementById("tgMaxPerToken").value) || 1
+          Number(document.getElementById("tgMaxPerToken").value) || 1,
+        inference_device:
+          document.getElementById("inferenceDevice").value || "auto"
       };
       const button = document.getElementById("saveTailgating");
       button.disabled = true;
